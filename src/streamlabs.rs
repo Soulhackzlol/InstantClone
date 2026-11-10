@@ -1,4 +1,4 @@
-//! Streamlabs Desktop (experimental): its Twitch streams go through
+//! Streamlabs Desktop: its Twitch streams go through
 //! InstantClone with nothing to set up inside Streamlabs.
 //!
 //! Streamlabs is a fork of OBS that never reads OBS's service list, so the

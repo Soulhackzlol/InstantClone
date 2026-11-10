@@ -1,0 +1,28 @@
+/* - System ------------------ */
+.sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:24px}
+@media (max-width:560px){.sys-section,.obs-section{padding:18px 16px}}
+.sys-language{margin-top:12px;max-width:260px}
+/* Collapsible System section (e.g. legacy OBS quick launch). Native
+   <details>; the summary carries the section label + a rotating caret. */
+details.sys-collapse>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;-webkit-user-select:none;user-select:none}
+details.sys-collapse>summary::-webkit-details-marker{display:none}
+details.sys-collapse>summary::before{content:"";flex:none;width:0;height:0;border-left:5px solid var(--fg-3);border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .18s var(--ease-out)}
+details.sys-collapse[open]>summary::before{transform:rotate(90deg)}
+details.sys-collapse>summary .ic-label{margin:0}
+/* Danger zone - visually fenced from Save with an err-tinted top border
+   so a click reaching for Save can't drift into Reset by accident. */
+.sys-reset{margin-top:24px;padding-top:18px;border-top:1px dashed color-mix(in oklch,var(--err) 32%,var(--line))}
+.sys-reset-head{margin-bottom:12px}
+.sys-reset-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:720px){.sys-reset-grid{grid-template-columns:1fr}}
+.sys-reset-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;
+  display:flex;flex-direction:column;gap:8px}
+.sys-reset-card-danger{border-color:color-mix(in oklch,var(--err) 32%,var(--line));
+  background:color-mix(in oklch,var(--err) 4%,var(--bg-2))}
+.sys-reset-card .ic-btn{align-self:flex-start;margin-top:6px}
+.restart-banner{padding:10px 14px;border-radius:8px;
+  background:color-mix(in oklch,var(--warn) 8%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);
+  color:var(--warn);font-size:12.5px;display:flex;align-items:center;gap:10px;justify-content:space-between;
+  animation:softDrop .25s var(--ease-out)}
+.restart-banner[hidden]{display:none}

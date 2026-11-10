@@ -1,0 +1,209 @@
+<section class="tab-pane" data-pane="overlay" hidden>
+  <!-- ===== GALLERY VIEW: browse + preview, open Studio to edit ===== -->
+  <div id="ov-gallery">
+    <div class="tab-head" style="align-items:flex-start">
+      <div>
+        <div class="tab-title">Overlay</div>
+        <div class="tab-sub">Everything viewers see, by what it shows: your delay, alerts, goals and timers, and anything else. Each one is a browser source in OBS.</div>
+      </div>
+      <!-- What can be added depends on the page showing (overlaySubShown). -->
+      <div class="ov-head-acts" data-ovact="delay">
+        <button class="ic-btn ic-btn-ghost" data-st="restoreDefaults" title="Put the built-in delay overlays back as they came">Restore built-ins</button>
+        <button class="ic-btn dest-add-btn" data-st="newOverlay" data-st-args="[&quot;delay&quot;]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New delay overlay</span></button>
+      </div>
+      <div class="ov-head-acts" data-ovact="alerts" hidden>
+        <button class="ic-btn dest-add-btn" data-st="newOverlay" data-st-args="[&quot;alerts&quot;]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New design</span></button>
+      </div>
+      <div class="ov-head-acts" data-ovact="goals" hidden>
+        <button class="ic-btn ic-btn-ghost" onclick="Integrations.newTracker('timer')">New timer</button>
+        <button class="ic-btn dest-add-btn" onclick="Integrations.newTracker('goal')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New goal</span></button>
+      </div>
+      <div class="ov-head-acts" data-ovact="custom" hidden>
+        <button class="ic-btn ic-btn-ghost" onclick="reveal('overlays')" title="Where your own .html files go">Open folder</button>
+        <button class="ic-btn dest-add-btn" data-st="newOverlay" data-st-args="[&quot;custom&quot;]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New overlay</span></button>
+      </div>
+    </div>
+
+    <nav class="sub-tabs section-tabs" id="ov-sub-tabs" role="tablist" aria-label="What is on stream">
+      <span class="sub-tab-ind"></span>
+      <button class="sub-tab on" data-subtab="delay" role="tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12M7 3v3.5L12 12l-5 5.5V21M17 3v3.5L12 12l5 5.5V21"/></svg>
+        <span>Delay</span></button>
+      <button class="sub-tab" data-subtab="alerts" role="tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 4 1 5 2 6H4c1-1 2-2 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+        <span>Alerts</span></button>
+      <button class="sub-tab" data-subtab="goals" role="tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
+        <span>Goals and timers</span></button>
+      <button class="sub-tab" data-subtab="custom" role="tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h7v7H4zM17.5 4.5l3.5 6h-7zM17.5 14a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zM4 14h7v7H4z"/></svg>
+        <span>Custom</span></button>
+    </nav>
+
+    <div class="sub-pane" data-subpane="delay">
+    <div class="ovg-page" id="ovg-browser">
+      <div class="ovg-blank" id="ovg-blank" hidden></div>
+      <div class="ovg-top" id="ovg-top">
+        <section class="overlay-section ovg-shelf">
+          <div class="ovg-shelf-head"><span class="ic-label" id="ovg-shelf-label">Delay overlays</span><span class="ovg-count" id="ovg-count"></span></div>
+          <div class="ovg-list" id="ovg-list"></div>
+        </section>
+
+        <section class="overlay-section ovg-view">
+          <div class="ovg-viewbar">
+            <span class="ic-label">Preview</span>
+            <span class="ph-cap" id="ovg-phase"></span>
+            <div class="st-simbar ovg-viewend" id="ovg-simbar" role="group" aria-label="The delay state the preview plays">
+              <button class="st-auto on" data-psim="auto" data-st="previewSim" data-st-args="[&quot;auto&quot;]" title="Auto-cycle the delay states"><span class="ic"></span> Auto</button>
+              <button class="st-sim" data-psim="idle" data-st="previewSim" data-st-args="[&quot;idle&quot;]">Idle</button>
+              <button class="st-sim" data-psim="preparing" data-st="previewSim" data-st-args="[&quot;preparing&quot;]">Arming</button>
+              <button class="st-sim" data-psim="ready" data-st="previewSim" data-st-args="[&quot;ready&quot;]">Ready</button>
+              <button class="st-sim" data-psim="active" data-st="previewSim" data-st-args="[&quot;active&quot;]">Active</button>
+              <button class="st-sim" data-psim="error" data-st="previewSim" data-st-args="[&quot;error&quot;]">Error</button>
+            </div>
+          </div>
+          <div class="ovg-fit">
+            <div class="ovg-stage" id="ovg-stage">
+              <div class="ovg-scale" id="ovg-scale"><iframe id="ov-preview" title="Overlay preview"></iframe></div>
+              <button type="button" class="ovg-zoom" id="ovg-zoom" data-st="toggleWholeCanvas" hidden>Whole canvas</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="overlay-section ovg-detail">
+          <div class="ovg-detail-head">
+            <span class="ovg-ic" id="ovg-ic"></span>
+            <div class="ovg-detail-id"><div class="ovg-title" id="ovg-name"></div><div class="ovg-kind" id="ovg-kind"></div></div>
+          </div>
+          <div class="ovg-primary" id="ovg-primary"></div>
+          <div class="ovg-urlbox" id="ovg-urlbox">
+            <div class="ic-label">Browser source</div>
+            <div class="copy-block">
+              <code class="mono" id="ovg-url">select an overlay</code>
+              <button class="ic-btn ic-btn-ghost" id="ovg-copy" data-st="copyGallery">Copy URL</button>
+            </div>
+            <div class="ovg-hint">Sized <b>1920 × 1080</b> in OBS, so it lines up with your canvas.</div>
+          </div>
+          <div class="st-rowbtns ovg-more" id="ovg-actions"></div>
+        </aside>
+      </div>
+
+      <details class="overlay-section ovg-folder" data-only="custom">
+        <summary>Overlays folder</summary>
+        <div class="tab-sub">Drop your own <code class="mono">.html</code> files here and they appear on this page. <span id="ov-dir-display" hidden></span></div>
+        <div class="ov-dir-row">
+          <input id="s-ovdir" class="ic-input mono" placeholder="overlays/">
+          <button class="ic-btn ic-btn-primary" id="ov-dir-save" onclick="saveOverlaysDir(this)">Save</button>
+          <button class="ic-btn ic-btn-ghost" onclick="reveal('overlays')">Open</button>
+        </div>
+      </details>
+      <div class="muted og-note" data-only="delay">To control the delay from inside OBS, the control dock is on the <a href="#" onclick="showTab('obs');return false">OBS tab</a>.</div>
+      <div class="muted og-note" data-only="alerts">Which design each alert plays is picked in <a href="#" onclick="showTab('integrations');return false">Integrations</a>: open the alert, then its <b>Design</b>.</div>
+    </div>
+    </div>
+    <div class="sub-pane" data-subpane="custom" hidden></div>
+
+    <!-- Alerts: integrations.js draws the bar for the alerts page in OBS, and
+         the gallery above comes in under it, listing the alert designs. Goals
+         and timers: integrations.js draws it all (its Stage). -->
+    <div class="sub-pane" data-subpane="alerts" hidden><div id="ov-alerts" class="ov-stage"></div></div>
+    <div class="sub-pane" data-subpane="goals" hidden><div id="ov-goals" class="ov-stage"></div></div>
+  </div>
+
+  <!-- ===== STUDIO: floating editor modal (opened on demand) ===== -->
+  <div id="ov-studio" class="st-modal" hidden>
+    <div class="st-modal-card">
+      <div class="st-modal-head">
+        <button class="ic-btn ic-btn-ghost st-withic" data-st="backToGallery"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>Back</button>
+        <div class="st-head-title">
+          <div class="tab-title" style="font-size:15px">Overlay Studio</div>
+        </div>
+        <div class="st-toolbar">
+          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-undo" title="Undo (Ctrl+Z)" aria-label="Undo" data-st="undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-2"/></svg></button>
+          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" data-st="redo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h2"/></svg></button>
+          <input id="st-name" class="ic-input" placeholder="Overlay name" value="My overlay" aria-label="Overlay name" data-st="setDocName">
+          <button class="ic-btn ic-btn-primary" id="st-save" data-st="save" title="Overwrite this overlay">Save</button>
+          <button class="ic-btn ic-btn-ghost" data-st="saveAsNew" title="Save a separate copy with a new URL">Save as new</button>
+          <button class="ic-btn ic-btn-ghost st-withic" data-st="copyUrl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9h11v11H9zM5 15H4V4h11v1"/></svg>Copy URL</button>
+          <div class="st-menu">
+            <button class="ic-btn ic-btn-ghost st-icobtn" title="More" aria-label="More options" data-st="toggleMenu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg></button>
+            <div class="st-menu-pop" id="st-menu-pop" hidden>
+              <button data-st="menu" data-st-args="[&quot;rename&quot;]">Rename</button>
+              <button id="st-menu-move" data-st="menu" data-st-args="[&quot;move&quot;]">Move to Custom</button>
+              <button data-st="menu" data-st-args="[&quot;keys&quot;]">Keyboard shortcuts</button>
+              <button data-st="menu" data-st-args="[&quot;export&quot;]">Export .json</button>
+              <button data-st="menu" data-st-args="[&quot;import&quot;]">Import .json</button>
+              <button class="st-danger" data-st="menu" data-st-args="[&quot;delete&quot;]">Delete overlay</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="st-modal-body">
+        <aside class="st-left">
+          <div class="st-tabs" id="st-left-tabs">
+            <button class="on" data-stleft="layers" data-st="leftTab" data-st-args="[&quot;layers&quot;]">Layers</button>
+            <button data-stleft="add" data-st="leftTab" data-st-args="[&quot;add&quot;]">Add</button>
+            <button data-stleft="theme" data-st="leftTab" data-st-args="[&quot;theme&quot;]">Theme</button>
+          </div>
+          <div class="st-left-body" id="st-left-body"></div>
+        </aside>
+
+        <main class="st-canvas-wrap">
+          <div class="st-statebar2">
+            <div class="st-states" id="st-states"></div>
+            <div class="st-state-actions">
+              <span class="ph-cap" id="st-phase"></span>
+              <span class="st-synced" id="st-synced" title="Preview re-synced to your latest change">⟳ synced</span>
+              <button class="st-auto" id="st-play" data-st="play" title="Auto-cycle the delay states"><span class="ic"></span> Auto preview</button>
+            </div>
+          </div>
+          <div class="st-canvas-frame" id="st-canvas-frame">
+            <div class="st-canvas-scale" id="st-canvas-scale">
+              <iframe id="st-canvas" title="Overlay canvas"></iframe>
+              <div class="st-hit" id="st-hit"></div>
+              <div class="st-guide v" id="st-guide-v"></div>
+              <div class="st-guide h" id="st-guide-h"></div>
+            </div>
+            <div class="st-canvas-bounds" id="st-canvas-bounds"><span class="lbl">SAFE AREA</span></div>
+            <div class="st-zoom" role="group" aria-label="Zoom">
+              <button data-st="zoomOut" title="Zoom out (Ctrl+-)" aria-label="Zoom out">&minus;</button>
+              <button id="st-zoom-level" data-st="zoomFit" title="Fit the canvas (Ctrl+0)" aria-label="Fit the canvas">100%</button>
+              <button data-st="zoomIn" title="Zoom in (Ctrl+=)" aria-label="Zoom in">+</button>
+            </div>
+          </div>
+        </main>
+
+        <aside class="st-right" id="st-props">
+        </aside>
+      </div>
+
+      <div class="st-ctx st-menu-pop" id="st-ctx" role="menu" hidden></div>
+      <div class="st-keys" id="st-keys" role="dialog" aria-modal="true" aria-labelledby="st-keys-h" hidden>
+        <div class="st-keys-card">
+          <div class="st-keys-head"><b id="st-keys-h">Keyboard shortcuts</b><button class="st-layer-btn" data-st="toggleKeys" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+          <div class="st-keys-grid">
+            <section><h4>Picking</h4><dl><dt>Click</dt><dd>Pick a layer</dd><dt>Shift or Ctrl + click</dt><dd>Add a layer, or take it out</dd><dt>Drag on empty canvas</dt><dd>Pick every layer it touches</dd><dt>Ctrl+A</dt><dd>Pick every layer on the canvas</dd><dt>Double-click</dt><dd>Type its words</dd><dt>Esc</dt><dd>Step back: the drag, the field, what is picked, then the Studio</dd></dl></section>
+            <section><h4>Moving</h4><dl><dt>Drag</dt><dd>Move it (Shift: straight across or down, Alt: no snapping)</dd><dt>Arrow keys</dt><dd>Nudge 1 px (Shift: 10 px)</dd><dt>Drag a handle</dt><dd>Resize (Shift on a corner: keep its shape)</dd></dl></section>
+            <section><h4>Layers</h4><dl><dt>Ctrl+C, Ctrl+X, Ctrl+V</dt><dd>Copy, cut, paste, between overlays too</dd><dt>Ctrl+D</dt><dd>Duplicate</dd><dt>Delete</dt><dd>Delete</dd><dt>Ctrl+&uarr;, Ctrl+&darr;</dt><dd>Bring forward, send back</dd><dt>Ctrl+Shift+&uarr;, &darr;</dt><dd>To the front, to the back</dd><dt>Ctrl+Shift+L</dt><dd>Lock or unlock</dd><dt>Drag a row in Layers</dt><dd>Restack</dd><dt>Right-click</dt><dd>All of these, in a menu</dd></dl></section>
+            <section><h4>View</h4><dl><dt>Ctrl + scroll</dt><dd>Zoom at the pointer</dd><dt>Ctrl+=, Ctrl+-</dt><dd>Zoom in, zoom out</dd><dt>Ctrl+0</dt><dd>Fit the canvas</dd><dt>Space + drag, or middle drag</dt><dd>Pan</dd><dt>Scroll, zoomed in</dt><dd>Pan (Shift: across)</dd></dl></section>
+            <section><h4>History</h4><dl><dt>Ctrl+Z</dt><dd>Undo</dd><dt>Ctrl+Shift+Z, Ctrl+Y</dt><dd>Redo</dd><dt>?</dt><dd>This card</dd></dl></section>
+          </div>
+        </div>
+      </div>
+      <div class="st-modal-foot">
+        <span class="st-perf ok" id="st-perf" title="">Lightweight</span>
+        <span id="st-foot-edit">&nbsp;Editing the <b id="st-foot-state">Active</b> state &nbsp;·</span>&nbsp; URL: <code class="mono" id="st-url">save to get a URL</code> &nbsp;·&nbsp; <b>Esc</b> to close &nbsp;·&nbsp; <button class="st-foot-keys" data-st="toggleKeys"><kbd>?</kbd> Shortcuts</button>
+      </div>
+    </div>
+  </div>
+</section>
+

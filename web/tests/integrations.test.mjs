@@ -1,4 +1,4 @@
-// The Integrations tab (web/integrations.js). Its previews repeat rules the
+// The Integrations tab (web/integrations/). Its previews repeat rules the
 // app applies when an integration really runs: how a template fills in, how
 // a check compares, when quiet hours hold. Where the script says "Mirrors
 // <a Rust function>", the cases here are that function's own test cases, so

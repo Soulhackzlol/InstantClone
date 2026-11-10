@@ -46,7 +46,7 @@ pub fn default_client_id() -> String {
 }
 
 /// The user's own app (System settings) wins over the default.
-fn effective_client_id(custom: &str) -> String {
+pub fn effective_client_id(custom: &str) -> String {
     let custom = custom.trim();
     if custom.is_empty() {
         default_client_id()
@@ -446,18 +446,44 @@ impl Twitch {
         if !self.login_current(attempt) {
             return;
         }
-        self.note_scopes(which, who.scopes.or(tokens.scopes));
+        *self.login.lock() = None;
+        self.sign_in(which, &tokens, &who);
+    }
+
+    /// A streamer's login made elsewhere: the wizard's "Get my key from
+    /// Twitch" asks for these permissions too, so one approval also connects
+    /// Integrations. Taken only when no streamer account is connected yet
+    /// and it came through the same Twitch app; false when it wasn't.
+    /// Also false while a login of its own is under way: that one would
+    /// replace the adopted account when it finishes.
+    pub fn adopt_main(
+        self: &Arc<Self>,
+        client_id: &str,
+        tokens: &auth::Tokens,
+        who: &auth::Validated,
+    ) -> bool {
+        if self.account(Which::Main).is_some()
+            || client_id != self.client_id()
+            || self.login.lock().is_some()
+        {
+            return false;
+        }
+        self.sign_in(Which::Main, tokens, who);
+        true
+    }
+
+    fn sign_in(self: &Arc<Self>, which: Which, tokens: &auth::Tokens, who: &auth::Validated) {
+        self.note_scopes(which, who.scopes.clone().or(tokens.scopes.clone()));
         self.set_account(
             which,
             Some(TwitchAccount {
-                login: who.login,
-                user_id: who.user_id,
-                access: tokens.access,
-                refresh: tokens.refresh,
+                login: who.login.clone(),
+                user_id: who.user_id.clone(),
+                access: tokens.access.clone(),
+                refresh: tokens.refresh.clone(),
                 expires_at_ms: unix_ms() + tokens.expires_in * 1000,
             }),
         );
-        *self.login.lock() = None;
         *self.notice.lock() = None;
         self.restart_chat(which);
         if which == Which::Main {

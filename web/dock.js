@@ -1516,7 +1516,7 @@ function sectionLabel(text, inline) {
 function buildEditor() {
   const body = $('sheet-body'); if (!body) return;
   body.innerHTML = '';
-  const head = document.createElement('div'); head.className = 'ehead';
+  const head = document.createElement('div'); head.className = 'sheet-head';
   head.innerHTML = `<h3>Customize dock</h3><span class="slot" title="?dock=${esc(SLOT)}">${esc(slotName(SLOT))}</span>`;
   const x = document.createElement('button'); x.className = 'eclose'; x.innerHTML = '&times;'; x.title = 'Done'; x.setAttribute('aria-label', 'Close'); x.onclick = closeEditor;
   head.appendChild(x); body.appendChild(head);

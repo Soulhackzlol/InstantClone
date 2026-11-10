@@ -204,7 +204,7 @@ Mapea las mismas acciones a un pad o un knob, aprendidos pulsando el control en 
 <tr>
 <td valign="top">
 
-**🎬 Streamlabs Desktop (experimental)**
+**🎬 Streamlabs Desktop**
 Conéctalo una vez desde la pestaña **OBS** y sigue saliendo en directo con el botón **Go Live** de Streamlabs, con la sesión iniciada en Twitch. Enhanced Broadcasting y la pista VOD de Twitch siguen funcionando, y lo que sale lo decides tú: YouTube, Kick, cualquier RTMP, con o sin un destino de Twitch.
 
 </td>
@@ -226,8 +226,8 @@ Si OBS se cuelga o se congela, todos los destinos siguen en directo con una pant
 <tr>
 <td valign="top" colspan="2">
 
-**🧩 Integraciones (experimental)**
-InstantClone habla con Discord, el chat de Twitch, tu móvil, OBS y tus propias herramientas. Puede arrancar con follows, subs, subs regaladas, bits, raids, recompensas de puntos de canal y pausas publicitarias, y con la grabación de OBS, las repeticiones o un micro silenciado. Con un clic añades un aviso de crasheo, alertas de Twitch en pantalla, un comando `!delay`, controles para mods, un botón de highlight que clipea lo que los espectadores vieron de verdad, una tarjeta de Discord que escribe la línea de tiempo de tu stream, capítulos de YouTube, una luz de "en directo" y más, y un editor por pasos cubre el resto, hasta las escenas, filtros, grabación y atajos de OBS, y luces y enchufes inteligentes de tu red (WiZ, LIFX, Govee, Yeelight, Kasa, Shelly, WLED) sin hub. Son nuevas y aún pueden cambiar: cuéntanos lo que falle o confunda con el enlace **Cuéntanoslo** de la pestaña.
+**🧩 Integraciones**
+InstantClone habla con Discord, el chat de Twitch, tu móvil, OBS y tus propias herramientas. Puede arrancar con follows, subs, subs regaladas, bits, raids, recompensas de puntos de canal y pausas publicitarias, y con la grabación de OBS, las repeticiones o un micro silenciado. Con un clic añades un aviso de crasheo, alertas de Twitch en pantalla, un comando `!delay`, controles para mods, un botón de highlight que clipea lo que los espectadores vieron de verdad, una tarjeta de Discord que escribe la línea de tiempo de tu stream, capítulos de YouTube, una luz de "en directo" y más, y un editor por pasos cubre el resto, hasta las escenas, filtros, grabación y atajos de OBS, y luces y enchufes inteligentes de tu red (WiZ, LIFX, Govee, Yeelight, Kasa, Shelly, WLED) sin hub. ¿Algo no funciona? El menú de cada integración tiene **Informar de un problema**.
 
 </td>
 </tr>
@@ -456,7 +456,7 @@ Sí, ambas cosas. Seis acciones se asignan a un atajo de teclado global, a un pa
 
 <br/>
 
-Sí, como función experimental. Conéctalo una vez desde la pestaña **OBS** (o el primer paso de la configuración), inicia sesión en Streamlabs con Twitch y sal en directo con su botón **Go Live**. No cambias nada dentro de Streamlabs. Si tiene la sesión iniciada en otra plataforma, el panel te lo dice.
+Sí. Conéctalo una vez desde la pestaña **OBS** (o el primer paso de la configuración), inicia sesión en Streamlabs con Twitch y sal en directo con su botón **Go Live**. No cambias nada dentro de Streamlabs. Si tiene la sesión iniciada en otra plataforma, el panel te lo dice.
 
 </details>
 

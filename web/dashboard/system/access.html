@@ -1,0 +1,91 @@
+  <!-- Access: who can publish and open the dashboard, and on which ports -->
+  <div class="sub-pane" data-subpane="access" hidden>
+    <section class="sys-section" data-find="ingest key stream key secret publish security">
+      <div class="ic-label">Stream key for InstantClone</div>
+      <div class="sys-version-row">
+        <span class="sys-version-pill off" id="ingest-status">Unlocked</span>
+        <span class="muted" id="ingest-status-note" style="font-size:12.5px">Any stream key is accepted</span>
+      </div>
+      <div class="tab-sub" style="margin-top:8px">Set a secret and only an OBS using it can stream in. Worth doing whenever InstantClone can be reached over a network. It becomes the Stream key you paste into OBS. Leave blank to accept any key.</div>
+      <div class="sec-row" style="margin-top:12px">
+        <input id="s-ingest-key" class="ic-input mono blur-secret" placeholder="blank = accept any key" aria-label="Stream key for InstantClone" autocomplete="off" spellcheck="false">
+        <button class="ic-btn ic-btn-ghost" id="ingest-key-toggle" onclick="toggleSecret('s-ingest-key',this)">Show</button>
+        <button class="ic-btn ic-btn-ghost" onclick="genIngestKey()">Generate</button>
+        <button class="ic-btn ic-btn-primary" onclick="saveIngestKey(this)">Save key</button>
+      </div>
+      <div class="muted" id="ingest-key-msg" style="font-size:11.5px;margin-top:8px"></div>
+    </section>
+    <section class="sys-section" data-find="password login lock security dock url dock token">
+      <div class="ic-label">Dashboard password</div>
+      <div class="sys-version-row">
+        <span class="sys-version-pill off" id="pw-status">Off</span>
+        <span class="muted" id="pw-status-note" style="font-size:12.5px">Local-only use needs none</span>
+      </div>
+      <div class="tab-sub" style="margin-top:8px">When the web UI is open to a network, a password stops anyone who finds it from touching your stream.</div>
+
+      <div id="sec-off" style="margin-top:14px">
+        <div class="ic-label">New password</div>
+        <div class="sec-row" style="margin-top:6px">
+          <input id="sec-pw" type="password" class="ic-input" placeholder="at least 8 characters" aria-label="New dashboard password" autocomplete="new-password" spellcheck="false">
+          <button class="ic-btn ic-btn-primary" onclick="enableAuth(this,'sec-pw')">Enable</button>
+        </div>
+        <div class="muted" style="font-size:11.5px;margin-top:8px">There is no reset link: one reachable over the network would not be much of a lock. If you forget it, delete the <code class="mono">dashboard_password_hash=</code> line from <code class="mono">instantclone.config.json</code> next to the app and restart.</div>
+        <div class="muted" id="sec-off-msg" style="font-size:11.5px;margin-top:8px"></div>
+      </div>
+
+      <div id="sec-on" hidden style="margin-top:14px">
+        <div class="ic-label">Change password</div>
+        <div class="sec-row" style="margin-top:6px">
+          <input id="sec-pw2" type="password" class="ic-input" placeholder="new password" aria-label="Change dashboard password" autocomplete="new-password" spellcheck="false">
+          <button class="ic-btn ic-btn-ghost" onclick="enableAuth(this,'sec-pw2')">Update</button>
+        </div>
+
+        <div class="sys-about-card" style="margin-top:14px">
+          <div class="ic-label">OBS dock URL</div>
+          <div class="tab-sub" style="margin-top:4px">The OBS dock can't sign in, so paste this token URL as its Custom Browser Dock. It runs the stream (delay, cut, destination on/off) and flips its own switches (arm when OBS connects, activate when ready, crash protection, trace log), but never reveals your keys or changes any other setting.</div>
+          <div class="copy-block" style="margin-top:8px">
+            <code class="mono blur-secret" id="sec-dock-url" style="overflow-x:auto;white-space:nowrap;min-width:0" title="Hidden to prevent leaks on stream. Use Show to reveal."></code>
+            <button class="ic-btn ic-btn-ghost" id="sec-dock-toggle" onclick="toggleSecret('sec-dock-url',this)">Show</button>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'sec-dock-url','Dock URL')">Copy</button>
+          </div>
+          <div class="sec-row" style="margin-top:10px">
+            <button class="ic-btn ic-btn-ghost" onclick="regenDock(this)">Regenerate</button>
+          </div>
+        </div>
+
+        <div class="sec-row" style="margin-top:14px">
+          <button class="ic-btn ic-btn-ghost" onclick="logoutNow()">Log out</button>
+          <button class="ic-btn ic-btn-warn" onclick="disableAuth(this)">Turn off password</button>
+        </div>
+        <div class="muted" id="sec-on-msg" style="font-size:11.5px;margin-top:8px"></div>
+      </div>
+    </section>
+    <section class="sys-section" data-find="ports port 7799 1935 ingest stream port web ui">
+      <div class="ic-label">Ports</div>
+      <div class="tab-sub">Changes apply when you save, no restart. A new Web UI port moves this page there. After a new stream port, OBS needs it too: a registered OBS service follows it if OBS is closed when you save. With OBS open, close it and press Update on the OBS tab.</div>
+      <div class="form-row tight" style="margin-top:12px">
+        <div><span class="ic-label">Stream port (OBS sends here)</span><input id="s-iport" class="ic-input mono" type="number" min="1" max="65535"></div>
+        <div><span class="ic-label">Web UI port</span><input id="s-wport" class="ic-input mono" type="number" min="1" max="65535"></div>
+      </div>
+    </section>
+    <section class="sys-section" data-find="lan network remote access phone tablet another pc bind">
+      <div class="ic-label">LAN access</div>
+      <div class="tab-sub">By default both ports are bound to 127.0.0.1. Open them to your LAN if OBS or your browser run on a different machine.</div>
+      <div class="checkbox-row" style="margin-top:10px">
+        <label><input type="checkbox" id="s-ibind" onchange="renderLanWarning()"> Allow LAN to publish</label>
+        <label><input type="checkbox" id="s-wbind" onchange="renderLanWarning()"> Allow LAN to access Web UI</label>
+      </div>
+      <!-- Shown only while the web UI is actually exposed. The control API
+           has no authentication - the CSRF guard stops cross-origin browser
+           POSTs, but a direct request (curl, script) carries no Origin
+           header and is allowed through by design so CLI and Stream Deck
+           keep working. On loopback that is exactly right; on a LAN it
+           means every machine on the network can drive the delay. Say so
+           rather than letting someone discover it. -->
+      <div id="lan-warn" class="lan-warn" hidden>
+        <span class="lw-ic" aria-hidden="true">⚠</span>
+        <span id="lan-warn-text"></span>
+      </div>
+    </section>
+  </div>
+

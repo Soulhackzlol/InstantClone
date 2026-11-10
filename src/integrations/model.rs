@@ -18,8 +18,8 @@ pub const MAX_INTEGRATIONS: usize = 100;
 pub const MAX_HANDLERS: usize = 32;
 /// Enough for a chat game with its paths spelled out (a slot machine with
 /// a pay table, streaks and a jackpot takes about 64), and still a bound
-/// on what one imported recipe can bring. `web/integrations.js` has the
-/// same number.
+/// on what one imported recipe can bring. `web/integrations/state.js` has
+/// the same number.
 pub const MAX_STEPS: usize = 256;
 pub const MAX_DEPTH: usize = 4;
 const MAX_NAME_LEN: usize = 80;

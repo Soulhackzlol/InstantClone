@@ -1,0 +1,72 @@
+<!-- - Hero -------------------─ -->
+<section class="ic-card hero-card" id="hero" hidden>
+  <div class="hold-banner" id="hold-banner" role="status" hidden>
+    <span class="hold-dot" aria-hidden="true"></span>
+    <div class="hold-copy"><b id="hold-title">OBS dropped. Keeping your destinations live.</b><span id="hold-sub" aria-live="off"></span></div>
+    <button class="ic-btn ic-btn-ghost" id="hold-end" onclick="endHold(this)">End now</button>
+  </div>
+  <div class="hero">
+    <!-- Aurora: drifting light behind the whole hero, tinted by the stream
+         state (see the aurora CSS). Decorative only. -->
+    <div class="hero-aurora" id="hero-aurora" aria-hidden="true">
+      <div class="aurora-flow"><b><i></i></b><b><i></i></b><b><i></i></b><b><i></i></b><b><i></i></b></div>
+      <span class="aurora-bloom" id="aurora-bloom"></span>
+    </div>
+    <div class="hero-readout" id="hero-readout" data-state="off">
+      <div class="hero-status-row">
+        <span class="state-pill" id="state-pill" style="--sc:var(--idle)">
+          <span class="state-dot" id="state-dot"></span>
+          <span class="state-words"><span class="state-label">IDLE</span><span class="state-desc">· No source</span></span>
+        </span>
+      </div>
+      <div class="hero-delay-row">
+        <span class="hero-delay-num mono d-off" id="delay-big">0.0</span>
+        <span class="hero-delay-unit">s</span>
+        <span class="hero-delay-of mono" id="delay-of" hidden></span>
+      </div>
+      <div class="arm-bar" id="arm-bar" hidden>
+        <div class="arm-bar-fill" id="arm-bar-fill" style="width:0%"></div>
+      </div>
+      <div class="hero-delay-sub" id="delay-sub">Live with no delay.</div>
+    </div>
+
+    <div class="hero-control">
+      <div class="cp-head">
+        <span class="ic-label">Custom delay</span>
+        <span class="cp-cap mono" id="cp-cap" title="The longest delay that fits in the buffer at this bitrate. Make the buffer bigger in System, up to 1 hour."></span>
+      </div>
+      <div class="cp-input-row">
+        <button class="cp-step" onclick="bumpDelay(-1)" id="cp-minus" aria-label="decrement">−</button>
+        <span class="cp-input-wrap" id="cp-input-wrap">
+          <input class="cp-input mono" id="delay-input" type="number" min="0" max="3600" step="1" placeholder="0">
+          <span class="cp-roll" id="cp-roll" aria-hidden="true" hidden></span>
+        </span>
+        <button class="cp-step" onclick="bumpDelay(1)" id="cp-plus" aria-label="increment">+</button>
+        <span class="cp-unit">SECONDS</span>
+      </div>
+      <div class="cp-cap-warn" id="cp-cap-warn" hidden></div>
+      <div class="cp-hint">Save common delays in <b>Profiles</b> for one-click insta-arm.</div>
+      <div class="cp-profiles" id="cp-profiles"></div>
+      <!-- Why a greyed-out profile can't arm. Owned by explainProfile(), so
+           renderCta's per-tick warning reset never hides it early. -->
+      <div class="cp-cap-warn" id="cp-chip-msg" role="status" hidden></div>
+      <div class="cp-actions">
+        <button class="ic-btn ic-btn-disabled cp-cta" id="cp-cta" onclick="ctaClick(event)">Arm delay</button>
+        <button class="ic-btn ic-btn-ghost cp-cancel" id="cp-cancel" hidden onclick="disarmClick(event)">Disarm</button>
+        <!-- "Cut after this airs" - only visible while a delay is active.
+             Shares the row with the Cut button (3:1 split) so the control
+             column's height never changes with state. The hovercard
+             explains the trick (mark now, auto-cut when the mark has
+             aired) so competitive streamers stop counting the delay in
+             their head after a match. -->
+        <span class="cutafter-wrap" id="cp-cutafter-wrap" hidden>
+          <button class="ic-btn ic-btn-ghost cp-cutafter" id="cp-cutafter" onclick="cutAfterClick(event)">⏱ Cut after</button>
+          <!-- Copy injected by renderCutAfter() - it swaps between the
+               explainer (idle) and the "mark set" card (pending). -->
+          <span class="cutafter-card" id="cp-cutafter-card" role="tooltip"></span>
+        </span>
+      </div>
+    </div>
+  </div>
+</section>
+

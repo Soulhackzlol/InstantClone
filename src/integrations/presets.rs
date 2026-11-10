@@ -148,6 +148,15 @@ pub const PRESETS: &[Preset] = &[
         preview: ("chat", "Stream delay is now on.", ""),
     },
     Preset {
+        id: "ad_break_notice",
+        name: "Ad break notice",
+        category: "chat",
+        description: "When a Twitch ad break starts, chat hears how long it lasts, and a welcome back once it ends.",
+        needs: &["twitch"],
+        recommended: false,
+        preview: ("chat", "📺 Ad break (90s). Back soon!", ""),
+    },
+    Preset {
         id: "mod_controls",
         name: "Mod controls",
         category: "chat",
@@ -220,6 +229,15 @@ pub const PRESETS: &[Preset] = &[
         preview: ("action", "", ""),
     },
     Preset {
+        id: "mute_reward",
+        name: "Mute me reward",
+        category: "auto",
+        description: "Viewers spend channel points to mute your mic for 10 seconds, shown on stream. Make a reward called \"Mute the streamer\" in its editor, and pick your mic if it isn't Mic/Aux.",
+        needs: &["twitch", "obs"],
+        recommended: false,
+        preview: ("overlay", "🔇 Bo muted me · back in 10 seconds", ""),
+    },
+    Preset {
         id: "clip_button",
         name: "Clip button",
         category: "auto",
@@ -271,44 +289,95 @@ pub struct Pack {
     pub name: &'static str,
     pub description: &'static str,
     pub presets: &'static [&'static str],
+    /// A starter pack says who it suits ("Ranked and tournament streams");
+    /// an add-on pack, for one job, leaves it empty.
+    pub who: &'static str,
+    /// The dashboard icon its card shows.
+    pub icon: &'static str,
 }
 
 pub const PACKS: &[Pack] = &[
+    // Starter packs: a whole setup for one kind of stream.
+    Pack {
+        id: "starter_first",
+        name: "First streams",
+        description: "The basics, done well: alerts that thank every follow and sub, a Discord ping when you go live, your socials one command away, and chat told if OBS drops.",
+        presets: &["twitch_alerts", "going_live", "socials", "tell_chat"],
+        who: "New channels finding their feet",
+        icon: "heart",
+    },
+    Pack {
+        id: "starter_competitive",
+        name: "Competitive",
+        description: "Anti-snipe first: chat can ask the delay, mods can change it, and an OBS crash is announced instead of quietly ending the stream.",
+        presets: &["delay_command", "delay_notice", "mod_controls", "tell_chat", "phone_crash"],
+        who: "Ranked and tournament streams",
+        icon: "target",
+    },
+    Pack {
+        id: "starter_subathon",
+        name: "Subathon",
+        description: "Big moments get big reactions: louder alerts, a clip when chat goes wild, ad breaks chat understands and a reward to mute you. Add the timer in Overlay, Goals.",
+        presets: &["hype_alerts", "hype_clip", "ad_break_notice", "mute_reward"],
+        who: "Long, event-driven streams",
+        icon: "flame",
+    },
+    Pack {
+        id: "starter_community",
+        name: "Community hub",
+        description: "Your Discord follows every stream: a go-live ping, a timeline that writes itself, highlights and chapters to jump back to.",
+        presets: &["going_live", "stream_timeline", "highlight", "chapters"],
+        who: "Communities that live on Discord",
+        icon: "users",
+    },
+    // Add-on packs: a few integrations for one job.
     Pack {
         id: "stream_pro",
         name: "Stream pro",
         description: "Your whole stream in Discord: a live timeline, highlights, chapters and alerts that only speak up when it matters.",
         presets: &["stream_timeline", "smart_alerts", "highlight", "chapters"],
+        who: "",
+        icon: "layers",
     },
     Pack {
         id: "highlights",
         name: "Highlights",
         description: "Never miss a clip: a button for you, and chat's reaction for when you're too busy to press it.",
         presets: &["highlight", "hype_clip", "chapters"],
+        who: "",
+        icon: "highlight",
     },
     Pack {
         id: "crash_safety",
         name: "Crash safety",
         description: "OBS drops: Discord and chat hear about it, and your editor gets a marker.",
         presets: &["crash_alert", "tell_chat", "vod_markers"],
+        who: "",
+        icon: "shield",
     },
     Pack {
         id: "chat_helper",
         name: "Chat helper",
         description: "Viewers ask, the bot answers. No more editing commands by hand.",
         presets: &["delay_command", "delay_notice", "socials"],
+        who: "",
+        icon: "chat",
     },
     Pack {
         id: "watchtower",
         name: "Watchtower",
         description: "For when you step away: OBS crashes reach your phone, platform problems reach Discord.",
         presets: &["smart_alerts", "phone_crash", "crash_alert"],
+        who: "",
+        icon: "eye",
     },
     Pack {
         id: "studio",
         name: "Studio",
         description: "Your room and OBS join in: an on-air light by the door, and the delay following your scenes.",
         presets: &["on_air_light", "scene_delay"],
+        who: "",
+        icon: "light",
     },
 ];
 
@@ -532,6 +601,54 @@ fn is_old_setdelay_limit(step: &Step) -> bool {
         && refusal_as_shipped
 }
 
+/// Twitch tells when an ad break starts and how long it is, not when it ends:
+/// waiting its length says "back" as it ends.
+fn ad_break_notice() -> Vec<Handler> {
+    vec![on(
+        EventKind::TwitchAd,
+        vec![
+            chat("📺 Ad break ({seconds}s). Back soon!"),
+            with(
+                Step::new(
+                    StepKind::Math,
+                    &[("a", "{seconds}"), ("op", "multiply"), ("b", "1000")],
+                ),
+                &[("save_as", "ad_ms")],
+            ),
+            Step::new(StepKind::Wait, &[("ms", "{ad_ms}")]),
+            chat("We're back! 👋"),
+        ],
+    )]
+}
+
+/// The reward the "Mute me" entry answers, and the mic it mutes: OBS's own
+/// name for the first mic.
+const MUTE_REWARD: &str = "Mute the streamer";
+const MUTE_MIC: &str = "Mic/Aux";
+
+/// A channel point reward that mutes the mic for a while, on stream for
+/// everyone to see, then unmutes it.
+fn mute_reward() -> Vec<Handler> {
+    let mic = |action| Step::new(StepKind::Obs, &[("action", action), ("source", MUTE_MIC)]);
+    vec![on_filtered(
+        EventKind::TwitchRedeem,
+        &[("reward", MUTE_REWARD)],
+        vec![
+            mic("mute"),
+            Step::new(
+                StepKind::Overlay,
+                &[
+                    ("title", "🔇 {user} muted me"),
+                    ("text", "Back in 10 seconds"),
+                    ("seconds", "10"),
+                ],
+            ),
+            Step::new(StepKind::Wait, &[("ms", "10000")]),
+            mic("unmute"),
+        ],
+    )]
+}
+
 /// Build a catalog entry. `discord_channel` is the id of the Discord
 /// connection to post to (empty when none exists yet).
 pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integration> {
@@ -562,6 +679,8 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
                 &[("fields", "Platform | {platform}")],
             )],
         )],
+        "ad_break_notice" => ad_break_notice(),
+        "mute_reward" => mute_reward(),
         "going_live" => {
             cooldown_ms = 10 * 60_000;
             vec![on(
@@ -1128,7 +1247,8 @@ fn chapters(d: &str) -> Vec<Handler> {
 /// Clip the moment once viewers have seen it, mark the VOD, put it on the
 /// timeline and in Discord, where the link unfurls into a player.
 fn highlight(d: &str) -> Vec<Handler> {
-    let post = |by: &str| {
+    // `fields` says who marked it: the streamer's button or a mod in chat.
+    let post = |fields: &str| {
         let mut steps = vec![
             Step::new(StepKind::Clip, &[]),
             check(
@@ -1140,10 +1260,7 @@ fn highlight(d: &str) -> Vec<Handler> {
                     line("highlight", "aired", "⭐ Highlight · [clip]({clip.url})"),
                     with(
                         card(d, GOLD, "⭐ New highlight", "[Watch the clip]({clip.url})"),
-                        &[
-                            ("above", "{clip.url}"),
-                            ("fields", &format!("Stream time | {{uptime}}\nBy | {by}")),
-                        ],
+                        &[("above", "{clip.url}"), ("fields", fields)],
                     ),
                     Step::new(
                         StepKind::Overlay,
@@ -1174,7 +1291,7 @@ fn highlight(d: &str) -> Vec<Handler> {
         steps
     };
     // Mods hear back in chat either way.
-    let mut from_mods = post("{user}")[1..].to_vec();
+    let mut from_mods = post("Stream time | {uptime}\nBy | {user}")[1..].to_vec();
     if let Some(found) = from_mods.iter_mut().find(|s| s.kind == StepKind::If) {
         found.then.push(reply("⭐ Clipped: {clip.url}"));
         found
@@ -1183,7 +1300,10 @@ fn highlight(d: &str) -> Vec<Handler> {
     }
     let mut from_mods = command("!highlight", Roles::MODS, 0, from_mods);
     from_mods.enabled = false;
-    vec![button(post("{channel}")), from_mods]
+    vec![
+        button(post("Stream time | {uptime}\nBy | {channel}")),
+        from_mods,
+    ]
 }
 
 /// Chat decides: when it gets busy in the ways the rules say, clip it.
@@ -1859,6 +1979,8 @@ pub fn catalog_json() -> Value {
                 ("id", json::str(p.id)),
                 ("name", json::str(p.name)),
                 ("description", json::str(p.description)),
+                ("who", json::str(p.who)),
+                ("icon", json::str(p.icon)),
                 (
                     "needs",
                     Value::Arr(pack_needs(p).into_iter().map(json::str).collect()),

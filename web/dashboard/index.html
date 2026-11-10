@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>InstantClone Dashboard</title>
+<script src="/i18n.js"></script>
+<script>
+<!-- include page/language-return.js -->
+</script>
+<link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect x='3' y='3' width='42' height='42' rx='10.5' fill='%235ac8fa'/%3E%3Cpath d='M17 14h4v20h-4zM27 14h4v20h-4z' fill='%23f4f6f9'/%3E%3C/svg%3E">
+<style>
+/* Shared foundations (page/) first, then each feature in on-screen order.
+   When two rules tie, the later piece wins, so a feature can restyle a
+   foundation. A rule for a feature's own elements goes in its own piece. */
+<!-- include page/tokens.css -->
+<!-- include page/atoms.css -->
+<!-- include page/toast.css -->
+<!-- include page/language-change.css -->
+<!-- include page/tabs.css -->
+<!-- include page/fields.css -->
+<!-- include page/pane.css -->
+<!-- include page/color-picker.css -->
+<!-- include page/modal.css -->
+<!-- include header/header.css -->
+<!-- include wizard/wizard.css -->
+<!-- include hero/phone-bar.css -->
+<!-- include hero/hero.css -->
+<!-- include destinations/destinations.css -->
+<!-- include stats/stats.css -->
+<!-- include obs/obs.css -->
+<!-- include overlays/overlays.css -->
+<!-- include overlays/studio.css -->
+<!-- include profiles/profiles.css -->
+<!-- include system/save-bar.css -->
+<!-- include system/find-setting.css -->
+<!-- include system/about.css -->
+<!-- include system/tray-color.css -->
+<!-- include system/system.css -->
+<!-- include system/vod-guide.css -->
+<!-- include system/reset.css -->
+<!-- include crash-protection/crash-protection.css -->
+<!-- include logs/logs.css -->
+<!-- include tour/tour.css -->
+<!-- include tour/guides.css -->
+<!-- include integrations/integrations.css -->
+</style>
+</head>
+<body>
+<div class="ic-app">
+<svg width="0" height="0" style="position:absolute"><defs>
+  <linearGradient id="sparkGrad" x1="0" x2="0" y1="0" y2="1">
+    <stop offset="0%" stop-color="oklch(0.82 0.13 220)" stop-opacity="0.3"/>
+    <stop offset="100%" stop-color="oklch(0.82 0.13 220)" stop-opacity="0"/>
+  </linearGradient>
+</defs></svg>
+
+<div class="ic-shell">
+<!-- Markup in on-screen order. -->
+
+<!-- include header/header.html -->
+<!-- include wizard/wizard.html -->
+<!-- include hero/hero.html -->
+<!-- include page/tabs.html -->
+<div class="pane-card" id="pane-card" hidden>
+
+<!-- include destinations/destinations.html -->
+<!-- include stats/stats.html -->
+<!-- include obs/obs.html -->
+<!-- include overlays/overlays.html -->
+<!-- include profiles/profiles.html -->
+<!-- include system/system.html -->
+<!-- include system/general.html -->
+<!-- include crash-protection/crash-protection.html -->
+<!-- include controls/controls.html -->
+<!-- include system/twitch.html -->
+<!-- include system/access.html -->
+<!-- include system/alerts-logs.html -->
+<!-- include system/about.html -->
+<!-- include system/save-bar.html -->
+<!-- include integrations/integrations.html -->
+<!-- include logs/logs.html -->
+</div><!-- /pane-card -->
+
+<footer class="ic-foot" id="ic-foot" hidden>
+  <span>RTMP <span class="mono" id="foot-rtmp">:1935</span></span>
+  <span class="ic-brand-dot"></span>
+  <span>Web UI <span class="mono" id="foot-web">:7799</span></span>
+  <span class="spacer"></span>
+  <span class="mono" id="foot-status">standby</span>
+</footer>
+
+</div><!-- /ic-shell -->
+</div><!-- /ic-app -->
+<div class="ic-toast-rail" id="toast-rail" aria-live="polite" aria-relevant="additions"></div>
+<!-- include hero/phone-bar.html -->
+<!-- include system/reset.html -->
+<!-- include tour/tour.html -->
+<!-- Overlay Studio runtime + baker (author-time only; defines window.ICOverlay). -->
+<script src="/overlay-runtime.js"></script>
+<script>
+// Run order. Functions are hoisted, so one can live in any piece; what runs
+// at load (listeners, values, calls) runs top to bottom. page/dom.js stays
+// first (its 'use strict' must open the script) and page/start.js last
+// (it starts the feeds). A piece that runs code at load goes after
+// everything that code uses; one with only functions can go anywhere.
+<!-- include page/dom.js -->
+<!-- include page/state.js -->
+<!-- include page/toast.js -->
+<!-- include hero/hero.js -->
+<!-- include header/header.js -->
+<!-- include stats/stats.js -->
+<!-- include destinations/destinations.js -->
+<!-- include profiles/profiles.js -->
+<!-- include system/settings.js -->
+<!-- include system/twitch.js -->
+<!-- include system/vod-guide.js -->
+<!-- include wizard/wizard.js -->
+<!-- include wizard/twitch-key.js -->
+<!-- include system/access.js -->
+<!-- include crash-protection/crash-protection.js -->
+<!-- include controls/hotkeys.js -->
+<!-- include controls/midi.js -->
+<!-- include obs/obs-service.js -->
+<!-- include obs/streamlabs.js -->
+<!-- include obs/obs-launch.js -->
+<!-- include obs/chat-dock.js -->
+<!-- include system/reset.js -->
+<!-- include hero/phone-bar.js -->
+<!-- include logs/logs.js -->
+<!-- include tour/tour.js -->
+<!-- include tour/guides.js -->
+<!-- include page/motion.js -->
+<!-- include page/color-picker.js -->
+<!-- include page/tabs.js -->
+<!-- include page/pane.js -->
+<!-- include system/save-bar.js -->
+<!-- include system/find-setting.js -->
+<!-- include page/sub-tabs.js -->
+<!-- include system/about.js -->
+<!-- include page/live.js -->
+<!-- include system/updates.js -->
+<!-- include page/start.js -->
+</script>
+<script src="/studio.js"></script>
+<script src="/integrations.js"></script>
+</body>
+</html>

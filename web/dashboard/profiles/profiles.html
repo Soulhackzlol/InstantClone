@@ -1,0 +1,15 @@
+<section class="tab-pane" data-pane="profiles" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">Profiles</div>
+      <div class="tab-sub">Profiles arm the delay in one click. Press <b>Activate</b> when it's ready, or turn on <b>Activate as soon as it's ready</b> in System &rarr; General.</div>
+    </div>
+  </div>
+  <div class="profile-list" id="profile-list"></div>
+  <div class="profile-new">
+    <input class="ic-input" placeholder="Name (e.g. Esports)" id="prof-name">
+    <input class="ic-input mono" placeholder="Seconds" id="prof-secs" type="number" min="0" max="3600" step="1">
+    <button class="ic-btn ic-btn-primary" onclick="addProfile()">Save</button>
+  </div>
+</section>
+

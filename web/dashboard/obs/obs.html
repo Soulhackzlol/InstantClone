@@ -1,0 +1,178 @@
+<section class="tab-pane" data-pane="obs" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title" id="obs-tab-title">OBS</div>
+      <div class="tab-sub" id="obs-tab-sub">Point OBS at InstantClone. Your real platform stream keys stay in Destinations.</div>
+    </div>
+  </div>
+  <!-- One app at a time: the connected one, or the one switched to. Only
+       where Streamlabs can run; OBS alone needs no pick. -->
+  <nav class="sub-tabs section-tabs obs-app-tabs" id="obs-app-tabs" role="tablist" aria-label="Streaming app" hidden>
+    <span class="sub-tab-ind"></span>
+    <button class="sub-tab on" data-subtab="obs" role="tab">
+      <span class="sub-tab-mark" data-app-mark="obs"></span>
+      <span>OBS Studio</span></button>
+    <button class="sub-tab" data-subtab="streamlabs" role="tab">
+      <span class="sub-tab-mark" data-app-mark="streamlabs"></span>
+      <span>Streamlabs</span></button>
+  </nav>
+  <p class="tab-sub obs-app-note" id="obs-app-note" hidden></p>
+  <div class="obs-grid" data-app="obs">
+    <section class="obs-section span-2 obs-reg-card" id="obs-reg-card" data-state="loading" data-tab-app="obs">
+      <div class="obs-card-head">
+        <div class="obs-card-titles">
+          <div class="ic-label"><span class="app-mark" data-app-mark="obs"></span>InstantClone as an OBS service <span class="ic-badge ic-badge-ok">recommended</span></div>
+          <div class="tab-sub obs-reg-intro">Register once with OBS closed: OBS gets set to stream to <b>InstantClone</b>, key included.</div>
+        </div>
+        <span class="ic-pill obs-reg-pill" id="obs-reg-pill"><span class="dot"></span><span id="obs-reg-pill-l">Checking</span></span>
+      </div>
+      <div class="obs-reg-status" id="obs-reg-status" aria-live="polite">Checking your OBS install&hellip;</div>
+      <div class="obs-installs-host" id="obs-installs"></div>
+      <ol class="obs-steps" id="obs-reg-steps" hidden>
+        <li>In OBS open <b>Settings &rarr; Stream</b>.</li>
+        <li>Set <b>Service</b> to <b>InstantClone</b> and click <b>OK</b>.</li>
+        <li>Start streaming in OBS. InstantClone sends it to every destination.</li>
+      </ol>
+      <div class="obs-reg-msg" id="obs-reg-msg" role="status"></div>
+      <div class="obs-reg-foot">
+      <details class="ic-disclose">
+        <summary>How it works</summary>
+        <div class="ic-disclose-body">
+          <p>Writes an <b>InstantClone</b> entry next to Twitch and YouTube in OBS's <i>Settings &rarr; Stream &rarr; Service</i> list. Multi-track via InstantClone works out of the box on Auto. OBS reads that list when it starts and writes it back when it quits, so InstantClone only changes it while that OBS is closed. If you change InstantClone's ports while OBS is closed, the entry follows at once.</p>
+          <p>Registering also sets that OBS's current profile to stream to InstantClone, key included, so there is nothing to pick. Its old stream settings are kept, and Unregister puts them back.</p>
+          <p>Each OBS on this PC has its own list: the installed one and every portable one. A portable OBS shows up here once it has been open while InstantClone runs, or pick its <code class="mono">obs64.exe</code> with <b>Using a portable OBS?</b></p>
+        </div>
+      </details>
+      </div>
+    </section>
+    <!-- Shown only where Streamlabs Desktop is installed (or already connected). -->
+    <section class="obs-section span-2 obs-reg-card" id="sl-card" data-tab-app="streamlabs" hidden>
+      <div class="obs-card-head">
+        <div class="obs-card-titles">
+          <div class="ic-label"><span class="app-mark" data-app-mark="streamlabs"></span>Streamlabs Desktop</div>
+          <div class="tab-sub obs-reg-intro">Connect it once: the stream you start from its <b>Go Live</b> button comes through InstantClone. Nothing to change inside Streamlabs.</div>
+          <div class="tab-sub obs-reg-intro"><b>Twitch only inside Streamlabs:</b> sign it in with Twitch and go live to Twitch, that's just the way in. InstantClone sends the stream wherever you choose, with or without Twitch: YouTube, Kick, any RTMP.</div>
+        </div>
+        <span class="ic-pill obs-reg-pill" id="sl-pill"><span class="dot"></span><span id="sl-pill-l">Checking</span></span>
+      </div>
+      <div class="obs-reg-status" id="sl-status" aria-live="polite">Checking for Streamlabs&hellip;</div>
+      <div class="obs-reg-msg" id="sl-msg" role="status"></div>
+      <div class="obs-reg-foot">
+      <details class="ic-disclose">
+        <summary>How it works</summary>
+        <div class="ic-disclose-body">
+          <p>Streamlabs stays signed in with Twitch, so its title, category, chat and alerts keep working, and Enhanced Broadcasting and the VOD track work too. InstantClone points Streamlabs' Twitch Enhanced Broadcasting setup at itself (a file in <code class="mono">%APPDATA%\slobs-client</code>) and leaves it there until you press <b>Disconnect</b>, which puts Streamlabs back as it was. Open InstantClone before you go live: while it's closed, Streamlabs can't start an Enhanced Broadcasting stream.</p>
+          <p>Go live with Enhanced Broadcasting off and InstantClone switches it on for that stream and asks Twitch for one video track: the same stream you picked, through InstantClone.</p>
+          <p>A Streamlabs signed in with YouTube or Kick can't come through yet: sign it in with Twitch. Streamlabs' own Multistream sends around InstantClone: add your other platforms in <b>Destinations</b> instead.</p>
+          <p>This is new. If something breaks or confuses you, <a href="https://github.com/Soulhackzlol/InstantClone/issues/new?labels=streamlabs" target="_blank" rel="noreferrer">report it</a>.</p>
+        </div>
+      </details>
+        <div class="obs-reg-btns">
+          <button class="ic-btn ic-btn-ghost" id="sl-import-btn" type="button" onclick="slImportTwitch()" title="Puts the stream key of the Twitch account Streamlabs is signed in with into your Twitch destination, so InstantClone sends to the same channel." hidden>Import Twitch key</button>
+          <button class="ic-btn ic-btn-ghost obs-unreg" id="sl-off-btn" type="button" onclick="slConnect(false)" hidden>Disconnect</button>
+          <button class="ic-btn ic-btn-primary" id="sl-on-btn" type="button" onclick="slConnect(true)" hidden>Connect Streamlabs</button>
+        </div>
+      </div>
+    </section>
+    <section class="obs-section span-2 obs-dock-card" data-tab-app="obs">
+      <div class="ic-label">Control InstantClone from OBS</div>
+      <div class="tab-sub">A dock inside OBS with the delay, profiles and destination switches, so you never leave OBS while live.</div>
+      <ol class="obs-steps">
+        <li>Copy the dock URL below.</li>
+        <li>In OBS open <b>Docks &rarr; Custom Browser Docks&hellip;</b></li>
+        <li>Name it <b>InstantClone</b>, paste the URL, click <b>Apply</b>. A size around <b>290 &times; 360</b> fits it well.</li>
+      </ol>
+      <div class="copy-block">
+        <code class="mono" id="dock-url" style="overflow-x:auto;white-space:nowrap;min-width:0">/dock</code>
+        <button class="ic-btn ic-btn-ghost" id="dock-url-toggle" type="button" onclick="toggleSecret('dock-url',this)" hidden>Show</button>
+        <button class="ic-btn ic-btn-ghost" type="button" onclick="copyEl(this,'dock-url','Dock URL')">Copy</button>
+      </div>
+    </section>
+    <section class="obs-section span-2" data-tab-app="obs">
+      <div class="ic-label">Chat in OBS <span class="muted" style="text-transform:none;letter-spacing:0">(optional)</span></div>
+      <div class="tab-sub">Drop chat into OBS as a Custom Browser Dock.</div>
+      <ol class="obs-steps">
+        <li>Pick your platform and type your channel name, then copy the URL.</li>
+        <li>In OBS open <b>Docks &rarr; Custom Browser Docks&hellip;</b>, name it, paste the URL, click <b>Apply</b>.</li>
+      </ol>
+      <div class="chat-dock-row" style="margin-top:10px">
+        <select id="chat-dock-platform" class="ic-input">
+          <option value="twitch">Twitch</option>
+          <option value="youtube">YouTube Live</option>
+          <option value="kick">Kick</option>
+          <option value="trovo">Trovo</option>
+        </select>
+        <input id="chat-dock-user" class="ic-input mono" placeholder="your channel name" autocomplete="off">
+      </div>
+      <div class="copy-block" style="margin-top:8px">
+        <code class="mono" id="chat-dock-url">enter your channel name above</code>
+        <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'chat-dock-url','Chat URL')">Copy</button>
+      </div>
+    </section>
+    <section class="obs-section span-2" data-tab-app="obs">
+      <div class="ic-label">Recommended OBS settings</div>
+      <div class="obs-recs">
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Video Encoder</div><div class="rec-v">GPU (NVENC / AMF / QSV)</div><div class="rec-why">InstantClone passes it through untouched. With Enhanced Broadcasting it picks your GPU's encoder on its own.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
+        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();toggleDisclosure('rec-kick-detail')">details</a></div></div>
+      </div>
+      <details class="ic-disclose" id="rec-kick-detail">
+        <summary>Kick requirements (and the B-frames myth)</summary>
+        <div class="ic-disclose-body">
+          <p>Kick's stream servers run on <b>AWS IVS (low-latency)</b>. The rules it actually enforces: <b>H.264</b>, <b>CBR</b> rate control, <b>keyframe interval 2 s</b>, bitrate <b>&le; 8000 kbps</b>, up to 60 fps.</p>
+          <p style="margin-top:8px"><b>B-frames:</b> despite what a lot of older guides say, Kick's normal RTMP server (IVS low-latency, Main profile) <b>accepts B-frames</b>. The strict "no B-frames" rule is AWS IVS <b>real-time / WHIP</b>, a different server Kick doesn't use for standard OBS streaming. So you usually don't need to touch B-frames at all.</p>
+          <p style="margin-top:6px">If Kick <i>does</i> reject your stream, set B-frames to 0 in OBS &rarr; <b>Settings &rarr; Output</b> (Advanced): x264 <b>B-frames</b> &rarr; <code class="mono">0</code>, NVENC <b>Max B-frames</b> &rarr; <code class="mono">0</code>. That's safe for Twitch and YouTube too. Note InstantClone passes on <b>one</b> encode without re-encoding, so B-frames can't be stripped for Kick alone. It's an OBS-side toggle that applies to every destination.</p>
+          <p style="margin-top:6px">Using Twitch <b>Enhanced Broadcasting</b>? Twitch picks the encode settings for you (including B-frames), so your manual OBS B-frames box may not apply while EB is on.</p>
+          <p style="margin-top:6px">Delay and cuts work the same either way: InstantClone cuts on keyframes (IDRs), which B-frames don't affect.</p>
+        </div>
+      </details>
+    </section>
+    <!-- Registering does it all for OBS (the wizard did the same), so the
+         manual setup is folded away for other apps and plugins. -->
+    <details class="obs-section span-2 sys-collapse obs-manual-card" data-tab-app="obs">
+      <summary><span class="ic-label">Another streaming app, or a Custom RTMP server?</span></summary>
+      <div class="tab-sub" style="margin-top:10px">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>. On OBS 32.2 and newer, Custom can't use Enhanced Broadcasting; use the registered service above for that.</div>
+      <div class="obs-manual-row">
+        <div class="obs-manual-field">
+          <div class="ic-label">Server URL</div>
+          <div class="copy-block">
+            <code class="mono" id="obs-srv">rtmp://localhost:1935/live</code>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-srv','Server URL')">Copy</button>
+          </div>
+        </div>
+        <div class="obs-manual-field">
+          <div class="ic-label">Stream key</div>
+          <div class="copy-block">
+            <code class="mono" id="obs-key">main</code>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-key','Stream key')">Copy</button>
+          </div>
+          <div class="tab-sub" id="obs-key-note" style="margin-top:6px">Any string works. The real platform key lives in <b>Destinations</b>.</div>
+          <div class="tab-sub" style="margin-top:8px">Want only an OBS with your secret to stream in? Set a <b>stream key for InstantClone</b> in <a href="#" onclick="goNetworkSettings();return false">System &rarr; Access</a>; it becomes the Stream key here.</div>
+        </div>
+      </div>
+    </details>
+    <!-- Legacy: OBS before 32.2 could only get Enhanced Broadcasting on a
+         custom service through a launch flag. Kept for those setups,
+         folded away for everyone else. -->
+    <details class="obs-section span-2 sys-collapse obs-legacy" id="sys-eb-launch" data-tab-app="obs">
+      <summary><span class="ic-label">Legacy: launch OBS with Enhanced Broadcasting</span><span class="muted" id="sys-eb-launch-note"></span></summary>
+      <div class="tab-sub" style="margin-top:10px">Start OBS pre-wired for Twitch <b>Enhanced Broadcasting</b> (the multi-resolution video ladder), with no destination editing needed. Session-only: reopen OBS normally and it streams plain again. Close OBS first: a second OBS next to an open one never gets the flag.</div>
+      <div id="sys-eb-twitch-warn" class="tab-sub" hidden style="margin-top:8px;color:var(--warn,#d6a23a)">
+        <b>Heads-up:</b> Enhanced Broadcasting needs an enabled <b>Twitch</b> destination with a stream key. OBS will still launch, but EB won't engage until you add one in the Destinations tab.
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="ic-btn ic-btn-ghost" id="sys-eb-btn" onclick="sysLaunchEb()">Launch OBS · Enhanced Broadcasting</button>
+        <button class="ic-btn ic-btn-ghost" id="sys-vodeb-btn" onclick="sysLaunchVodEb()">Launch OBS · EB + VOD audio track</button>
+        <button class="ic-btn ic-btn-ghost" id="sys-eb-shortcut-btn" onclick="createEbShortcut('sys-eb-shortcut-btn','sys-eb-msg')">Make a desktop shortcut</button>
+      </div>
+      <!-- Shown on OBS 32.2+ where the legacy VOD+EB launcher is hidden. -->
+      <div class="tab-sub" id="sys-vodeb-legacy-note" hidden style="margin-top:8px">For <b>VOD audio</b> on your OBS version, use the <b>VOD unlocker script</b> in <b>System &rarr; Twitch &amp; OBS</b>, and the registered <b>InstantClone</b> service for Enhanced Broadcasting. These launchers are only for OBS older than 32.2.</div>
+      <!-- Shown on older OBS where the legacy VOD+EB launcher still applies. -->
+      <div class="tab-sub" id="sys-vodeb-hint" style="margin-top:8px"><b>EB + VOD</b>: the <b>legacy VOD path</b>, for OBS before 32.2. It turns on VOD audio mode on your Twitch destination and writes OBS's VOD-track unlock flag. Close OBS before pressing it or the flag write is blocked.</div>
+      <ul id="sys-vodeb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:12.5px"></ul>
+      <div class="tab-sub" id="sys-eb-msg" style="margin-top:8px"></div>
+    </details>
+  </div>
+</section>
+

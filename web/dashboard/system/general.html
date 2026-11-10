@@ -1,0 +1,84 @@
+  <!-- General: how the app starts and behaves, and the delay buffer -->
+  <div class="sub-pane" data-subpane="general">
+    <section class="sys-section" data-find="language idioma spanish español english translate">
+      <div class="ic-label">Language</div>
+      <div class="tab-sub">For the dashboard and the OBS dock. Auto follows your browser. Logs stay in English.</div>
+      <select id="s-language" class="ic-input sys-language" aria-label="Language">
+        <option value="auto">Auto</option>
+        <option value="en" translate="no">English</option>
+        <option value="es" translate="no">Español</option>
+      </select>
+    </section>
+    <section class="sys-section" data-find="startup start with windows launch tray open dashboard auto arm activate default delay pre-arm when obs connects ready">
+      <div class="ic-label">Behavior</div>
+      <div class="tab-sub">How InstantClone reacts when OBS starts streaming and when the delay is ready.</div>
+      <div style="margin-top:14px;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+            <input type="checkbox" id="s-startup" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600" id="s-startup-title">Start with Windows</div>
+              <div class="tab-sub" style="margin-top:2px" id="s-startup-sub">Launches at login and waits in the tray, so OBS always has somewhere to publish.</div>
+            </div>
+          </label>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+            <input type="checkbox" id="s-open-dash" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600">Open dashboard on launch</div>
+              <div class="tab-sub" style="margin-top:2px" id="s-open-dash-sub">Opens this page in your browser each time the app starts. Turn off to stay in the tray.</div>
+            </div>
+          </label>
+        </div>
+        <div class="tray-color-row" id="s-tray-color-row" hidden>
+          <div style="flex:1">
+            <div style="font-weight:600">Tray icon color</div>
+            <div class="tab-sub" style="margin-top:2px" id="s-tray-color-sub"></div>
+          </div>
+          <div class="tray-colors" id="s-tray-colors" role="radiogroup" aria-label="Tray icon color"></div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+            <input type="checkbox" id="s-auto-arm" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600">Arm when OBS connects</div>
+              <div class="tab-sub" style="margin-top:2px">Starts saving video for the delay as soon as OBS connects. Best if you always stream delayed.</div>
+            </div>
+          </label>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+            <input type="checkbox" id="s-auto-act" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600">Activate as soon as it's ready</div>
+              <div class="tab-sub" style="margin-top:2px" title="Applies to every arm: by hand, from a profile, or when OBS connects. A cut still sticks; the next arm turns the delay on again.">No need to press Activate: every arm goes on air once it's ready.</div>
+            </div>
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="flex:1">
+            <div style="font-weight:600">Default delay</div>
+            <div class="tab-sub" style="margin-top:2px">Used when arming as OBS connects, and by the hotkey and MIDI arm and toggle actions. Also follows the last delay you armed by hand.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <input id="s-auto-arm-secs" class="ic-input mono" type="number" min="1" max="3600" style="width:80px;text-align:right">
+            <span class="muted" style="font-size:12px">s</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="sys-section" data-find="buffer disk size mb path memory delay length restart">
+      <div class="ic-label">Buffer</div>
+      <div class="tab-sub">The video saved for the delay, kept in a file on disk. More memory means a longer delay at the same bitrate.</div>
+      <div class="form-row tight" style="margin-top:12px;align-items:flex-start">
+        <div><span class="ic-label">Size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="1000000"></div>
+        <div><span class="ic-label">File</span><input id="s-bpath" class="ic-input mono"></div>
+      </div>
+      <div class="muted" id="s-bmb-hint" style="margin-top:8px;font-size:11.5px;line-height:1.4"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ic-btn ic-btn-ghost reveal-btn" onclick="reveal('buffer')">Show the file in Explorer</button>
+      </div>
+    </section>
+  </div>
+

@@ -1,0 +1,32 @@
+/* - Pane ------------------- */
+.pane-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:32px;min-height:360px;max-height:var(--pane-max,70vh);overflow-y:auto;overflow-x:hidden}
+@media (max-width:560px){.pane-card{padding:20px 16px}}
+/* Scrolling panels keep their scrollbar's room even when nothing scrolls,
+   so a tab growing past the fold (or its enter animation) never narrows the
+   content and nudges it sideways. The right padding gives that room back
+   (32px = 22px + the 10px scrollbar). */
+.pane-card,.dest-form-body{scrollbar-gutter:stable}
+/* Phones: the hero fills the screen, so a pane sized to what's left is a
+   360px box scrolling inside a scrolling page. Let the page scroll it. */
+@media (max-width:560px){.pane-card{max-height:none}}
+@supports (scrollbar-gutter:stable){.pane-card{padding-right:22px}}
+@supports (scrollbar-gutter:stable){@media (max-width:560px){.pane-card{padding-right:6px}}}
+/* Directional enter: the body slides in from the side the tab moved toward
+   (showTab sets --pane-dx: + for a rightward move, - for leftward, 0 on first
+   paint / sub-panes), echoing the sliding tab indicator. Transform + opacity
+   only so it's GPU-composited; .pane-card clips overflow-x so the slide never
+   flashes a scrollbar. Reduced-motion collapses it globally. */
+.tab-pane{animation:paneIn .28s var(--ease-out) both;display:flex;flex-direction:column;gap:28px}
+/* A pane laid out ahead of its first click (warmHiddenPanes): never seen,
+   never in the way, and hidden again before anything is drawn. */
+.pane-warm{position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;animation:none}
+.pane-warm .pane-warm{position:static}
+@media (max-width:560px){.tab-pane{gap:20px}}
+@keyframes paneIn{
+  from{opacity:0;transform:translate3d(var(--pane-dx,0),0,0)}
+  to{opacity:1;transform:translate3d(0,0,0)}
+}
+.tab-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.tab-title{font-size:20px;font-weight:650;color:var(--fg);letter-spacing:-.018em;line-height:1.25}
+.tab-sub{color:var(--fg-3);font-size:13.5px;line-height:1.5;margin-top:6px;max-width:64ch}

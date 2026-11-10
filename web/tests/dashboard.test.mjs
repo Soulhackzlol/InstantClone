@@ -1,4 +1,4 @@
-// The dashboard's own script (the inline one in web/index.html): how it
+// The dashboard's own script (web/dashboard/scripts/, inline in the page): how it
 // words durations and sizes, the buffer maths it shares with the server,
 // what a destination card says, and the Logs tab's reading of a line.
 import test from 'node:test';

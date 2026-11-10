@@ -1,0 +1,1636 @@
+/* - Integrations -------------------
+   Built from the Destinations pieces: a module is a .dcard whose screen
+   shows exactly what it sends, and every editor is the destination modal
+   (.ic-modal + .dest-form). Only the new shapes live here. Items entering,
+   leaving and moving are animated from integrations.js (see morph). */
+.ig-pane{display:flex;flex-direction:column;gap:14px}
+[data-flip]{position:relative}
+.ig-sub{text-wrap:pretty}
+.ig-num,.ig-count{font-variant-numeric:tabular-nums}
+.ig-count{color:var(--fg-4)}
+.ig-head-actions{display:flex;gap:8px;flex-wrap:wrap}
+.ic-btn.ig-small{padding:6px 11px;font-size:12px;border-radius:8px}
+.ig-self-start{align-self:flex-start}
+.ig-dim{opacity:.5}
+.ig-btn-ic{width:13px;height:13px;flex:none}
+/* Waiting on the app: same size, a spinner instead of the label. */
+.ic-btn.is-busy,.ic-btn-tiny.is-busy{position:relative;color:transparent !important;pointer-events:none}
+.ic-btn.is-busy>*,.ic-btn-tiny.is-busy>*{visibility:hidden}
+.ic-btn.is-busy::after,.ic-btn-tiny.is-busy::after{content:'';position:absolute;inset:0;margin:auto;width:14px;height:14px;
+  border-radius:50%;border:2px solid color-mix(in oklch,var(--fg) 25%,transparent);border-top-color:var(--fg);
+  animation:igSpin .7s linear infinite}
+.ic-btn-primary.is-busy::after{border-color:color-mix(in oklch,var(--accent-ink) 30%,transparent);border-top-color:var(--accent-ink)}
+.ig-spin{width:12px;height:12px;flex:none;border-radius:50%;border:2px solid color-mix(in oklch,var(--accent) 25%,transparent);
+  border-top-color:var(--accent);animation:igSpin .7s linear infinite}
+@keyframes igSpin{to{transform:rotate(360deg)}}
+.ig-running{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-3)}
+/* A destructive button waiting for its second click. */
+.ic-btn.ig-armed,.ic-btn-tiny.ig-armed{color:var(--danger) !important;
+  border-color:color-mix(in oklch,var(--danger) 45%,transparent);
+  background:color-mix(in oklch,var(--danger) 12%,var(--surface-3));animation:igArm .3s var(--ease-spring)}
+.ic-btn-tiny.ig-armed{width:auto;padding:0 9px;font-size:11.5px;font-weight:600;white-space:nowrap}
+@keyframes igArm{from{transform:scale(.96)}to{transform:none}}
+@keyframes igFadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes igPop{from{opacity:0;transform:scale(.25);filter:blur(4px)}to{opacity:1;transform:none;filter:blur(0)}}
+/* Loading. */
+.ig-skel{position:relative;overflow:hidden;height:150px;padding:8px;border-radius:14px;background:var(--bg-2);
+  border:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.ig-skel i{display:block;height:92px;border-radius:6px;background:var(--bg-1)}
+.ig-skel b{display:block;height:12px;width:55%;margin-left:4px;border-radius:4px;background:var(--surface-3)}
+.ig-skel u{display:block;height:9px;width:35%;margin:-4px 0 0 4px;border-radius:4px;background:var(--surface-3)}
+.ig-skel::after{content:'';position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,color-mix(in oklch,var(--fg) 6%,transparent),transparent);
+  animation:igShimmer 1.4s ease-in-out infinite}
+@keyframes igShimmer{to{transform:translateX(100%)}}
+/* Notices and connections. */
+.ig-notices{display:flex;flex-direction:column;gap:8px}
+.ig-notices:empty{display:none}
+.ig-notice{margin-top:0;align-items:center}
+.ig-notice-text{flex:1;min-width:0;text-wrap:pretty}
+.ig-notice-text b{color:var(--fg)}
+.ig-inline-warn{margin-top:0}
+.ig-modal .lan-warn a{color:var(--accent);font-weight:600}
+.ig-conns{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ig-conns .ic-label{margin-right:4px}
+.ig-conns .ic-pill{cursor:pointer;font:inherit;font-size:12px;
+  transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out),color .2s var(--ease-out),transform .15s var(--ease-out)}
+.ig-conns .ic-pill:hover{border-color:var(--line-2);color:var(--fg)}
+.ig-conns .ic-pill:active{transform:scale(.96)}
+/* Not set up yet: an invitation in the accent, so grey never reads as off. */
+.ic-pill.todo{color:var(--fg);border-style:dashed;border-color:color-mix(in oklch,var(--accent) 50%,transparent)}
+.ic-pill.todo .dot{background:none;box-shadow:inset 0 0 0 1.5px var(--accent)}
+.ic-pill.todo .ic-pill-v{color:var(--accent);font-weight:600}
+.ic-pill.todo .ic-pill-v::after{content:" +"}
+.ig-conns .ic-pill.todo:hover{border-color:var(--accent);background:color-mix(in oklch,var(--accent) 10%,transparent)}
+/* Segmented controls, with the dashboard's sliding pill. */
+.ig-seg{display:inline-flex;flex:0 0 auto;flex-wrap:wrap;max-width:100%}
+.ig-seg .sub-tab{flex:0 0 auto;padding:6px 13px;transition:color .2s var(--ease-out),transform .15s var(--ease-out)}
+.ig-seg .sub-tab:active{transform:scale(.96)}
+.ig-seg .sub-tab-ind{bottom:auto;opacity:0;transition:left .28s var(--ease-out),top .28s var(--ease-out),width .28s var(--ease-out),opacity .2s var(--ease-out)}
+.ig-views .sub-tab{padding:6px 9px}
+.ig-views svg{width:14px;height:14px;display:block}
+.ig-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ig-toolbar .ig-search{margin-left:auto;width:220px;padding:7px 11px}
+/* On a phone: the filters in one sideways row, then search beside the view
+   switch. */
+@media (max-width:520px){
+  .ig-toolbar .ig-seg:not(.ig-views){flex:1 1 100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .ig-toolbar .ig-search{flex:1;width:auto;min-width:0;margin-left:0}
+}
+/* Grid. */
+.ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(250px,100%),1fr));gap:20px}
+.ig-card{padding:10px;gap:10px;cursor:default}
+.ig-card .dcard-screen{display:flex;align-items:flex-start;height:96px;overflow:hidden;padding:10px;border-radius:6px;cursor:pointer;
+  transition:border-color .15s var(--ease-out)}
+.ig-card .dcard-screen:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 45%,var(--line))}
+.ig-card .dcard-screen:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-card-foot{display:flex;align-items:center;gap:9px;padding:2px 4px 4px}
+.ig-card-foot .dcard-icon,.ig-row .dcard-icon{width:28px;height:28px;border-radius:8px}
+.ig-card-foot .dcard-icon svg,.ig-row .dcard-icon svg{width:14px;height:14px}
+.ig-card .dcard-name{font-size:13px}
+.ig-card .dcard-host{font-size:10.5px;font-family:inherit;font-variant-numeric:tabular-nums}
+.ig-flag{min-width:0;max-width:none}
+/* No backdrop blur here: the badge's background is solid, so a blur behind
+   it shows nothing, and it made each card a blurred layer of its own for
+   the browser to redo on every frame. Twenty-odd integrations were enough
+   to make a browser with a weak or limited GPU path crawl on every tab. */
+.ig-flag.warn{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 35%,var(--line));
+  background:color-mix(in oklch,var(--warn) 10%,var(--surface-3))}
+.ig-flag.warn .d-dot{background:var(--warn)}
+.ig-flag.bad{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 40%,var(--line));
+  background:color-mix(in oklch,var(--danger) 10%,var(--surface-3))}
+.ig-flag.bad .d-dot{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+.ig-add-tile{min-height:150px}
+/* Switches: a bigger hit area and a knob that stretches on press. */
+.ig-pane .dcard-switch::after{content:'';position:absolute;inset:-11px -4px}
+.ig-pane .dcard-switch>span{transition:transform .22s var(--ease-spring),width .15s var(--ease-out),background .2s var(--ease-out)}
+.ig-pane .dcard-switch:active>span{width:18px}
+.ig-pane .dcard-switch.on:active>span{transform:translateX(12px)}
+.ig-pane .dcard-switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* List. */
+.ig-list{display:flex;flex-direction:column;gap:8px}
+.ig-row{padding:0;gap:0}
+.ig-row-main{display:flex;align-items:center;gap:12px;min-height:52px;padding:8px 10px 8px 14px}
+.ig-row-name{flex:0 0 220px;min-width:0;display:flex;flex-direction:column;gap:1px;padding:4px 6px;margin:-4px -6px;
+  border:0;border-radius:8px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;
+  transition:background-color .15s var(--ease-out)}
+.ig-row-name:hover{background:var(--surface-3)}
+.ig-row-sum{flex:1;min-width:0;font-size:12.5px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-row-last{flex:0 0 auto;min-width:84px;text-align:right;font-size:11.5px;color:var(--fg-4);font-variant-numeric:tabular-nums}
+.ig-row .ic-btn-tiny svg{width:14px;height:14px}
+.ig-row-peek{display:flex;gap:12px;padding:0 12px 12px 56px;animation:igFadeUp .26s var(--ease-out)}
+.ig-row-peek .dcard-screen{flex:1;padding:12px;border-radius:8px}
+.ig-row-peek-actions{width:150px;display:flex;flex-direction:column;gap:6px}
+.ig-row-peek-actions .ic-btn{padding:8px 12px}
+.ig-add-row{min-height:52px;flex-direction:row}
+.ig-add-row .dest-add-icon{width:28px;height:28px}
+.ig-add-row .dest-add-icon svg{width:15px;height:15px}
+.ig-none{padding:18px 4px;color:var(--fg-3);grid-column:1/-1}
+@media (max-width:760px){
+  .ig-row-sum{display:none}
+  .ig-row-name{flex:1}
+  .ig-row-peek{padding-left:12px;flex-direction:column}
+  .ig-row-peek-actions{width:auto;flex-direction:row}
+}
+/* First run: the starter packs, in the page's width. */
+.ig-packs{width:min(940px,100%);text-align:left}
+/* Starter packs: a card each, tinted by its own colour (--pk), what's
+   inside as a list, and one button that adds only what's missing. */
+.ig-starters{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(290px,100%),1fr));gap:14px}
+.ig-starter{position:relative;display:flex;flex-direction:column;gap:12px;padding:18px;border-radius:14px;overflow:hidden;
+  border:1px solid color-mix(in oklch,var(--pk) 28%,var(--line));
+  background:radial-gradient(120% 70% at 0% 0%,color-mix(in oklch,var(--pk) 13%,transparent),transparent 60%),var(--surface-2);
+  transition:border-color .2s var(--ease-out),transform .2s var(--ease-out),box-shadow .2s var(--ease-out)}
+.ig-starter:hover{border-color:color-mix(in oklch,var(--pk) 55%,var(--line));transform:translateY(-2px);
+  box-shadow:0 14px 34px -18px color-mix(in oklch,var(--pk) 60%,transparent)}
+.ig-st-top{display:flex;align-items:center;gap:12px}
+.ig-st-badge{flex:none;display:grid;place-items:center;width:42px;height:42px;border-radius:12px;color:var(--pk);
+  background:color-mix(in oklch,var(--pk) 16%,transparent);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--pk) 35%,transparent)}
+.ig-st-badge svg{width:21px;height:21px}
+.ig-st-id{min-width:0}
+.ig-st-title{font-size:16px;font-weight:700;color:var(--fg);line-height:1.25}
+.ig-st-who{font-size:12px;color:color-mix(in oklch,var(--pk) 70%,var(--fg-2));margin-top:2px}
+.ig-st-desc{margin:0;font-size:13px;line-height:1.55;color:var(--fg-2);text-wrap:pretty}
+.ig-st-list{list-style:none;margin:0;padding:4px;display:flex;flex-direction:column;gap:2px;border-radius:10px;
+  background:color-mix(in oklch,var(--bg) 55%,transparent);box-shadow:inset 0 0 0 1px var(--line)}
+.ig-st-list li{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;font-size:13px;color:var(--fg)}
+.ig-st-ic{flex:none;display:grid;place-items:center;width:24px;height:24px;border-radius:7px;color:var(--pk);
+  background:color-mix(in oklch,var(--pk) 12%,transparent)}
+.ig-st-ic svg{width:13px;height:13px}
+.ig-st-name{flex:1;min-width:0}
+.ig-st-list li.got{color:var(--fg-3)}
+.ig-st-list li.got .ig-st-ic{color:var(--fg-3);background:var(--surface-3)}
+.ig-st-got{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--ok)}
+.ig-st-got svg{width:11px;height:11px}
+.ig-st-foot{display:grid;gap:10px;margin-top:auto}
+.ig-st-foot .ig-cat-needs{min-width:0}
+.ig-st-add{justify-self:end}
+.ig-starter .ic-btn-primary.ig-st-add{background:var(--pk);border-color:transparent;color:var(--bg)}
+.ig-starter .ic-btn-primary.ig-st-add:hover{filter:brightness(1.08)}
+.ig-st-add.is-busy{opacity:.6;pointer-events:none;cursor:progress}
+/* Packs in the catalog: a heading per kind. */
+.ig-pk-head{grid-column:1/-1;display:flex;flex-direction:column;gap:3px;margin-top:4px}
+.ig-pk-head b{font-size:13px;color:var(--fg)}
+.ig-pk-head span{font-size:12.5px;color:var(--fg-3);max-width:70ch}
+.ig-pk-head ~ .ig-pk-head{margin-top:14px}
+/* Recommended, while there are few integrations: a way to the starters. */
+.ig-start-strip{grid-column:1/-1;display:flex;align-items:center;flex-wrap:wrap;gap:12px 18px;padding:14px 16px;border-radius:12px;
+  border:1px dashed color-mix(in oklch,var(--accent) 35%,var(--line));background:color-mix(in oklch,var(--accent) 6%,transparent)}
+.ig-start-txt{display:flex;flex-direction:column;gap:2px;flex:1 1 220px;min-width:0}
+.ig-start-txt b{font-size:13.5px;color:var(--fg)}
+.ig-start-txt span{font-size:12.5px;color:var(--fg-3)}
+.ig-start-chips{display:flex;flex-wrap:wrap;gap:8px}
+.ig-start-chip{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;font:inherit;font-size:12.5px;cursor:pointer;
+  color:var(--fg);background:color-mix(in oklch,var(--pk) 12%,var(--surface-2));border:1px solid color-mix(in oklch,var(--pk) 35%,var(--line));
+  transition:background .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-start-chip svg{width:14px;height:14px;color:var(--pk)}
+.ig-start-chip:hover{background:color-mix(in oklch,var(--pk) 22%,var(--surface-2));transform:translateY(-1px)}
+.ig-start-chip:focus-visible{outline:2px solid var(--pk);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.ig-starter,.ig-start-chip{transition:none}.ig-starter:hover,.ig-start-chip:hover{transform:none}}
+.ig-pack-list{display:flex;flex-direction:column;gap:5px;margin-top:4px;font-size:12.5px;color:var(--fg-2)}
+.ig-pack-list span{display:flex;align-items:center;gap:7px}
+.ig-pack-list svg{width:13px;height:13px;flex:none;color:var(--fg-3)}
+.ig-empty-more{margin-top:14px}
+/* Activity. */
+.ig-activity-box{padding:0}
+.ig-activity-box summary{display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:10px;cursor:pointer;
+  list-style:none;transition:background-color .15s var(--ease-out)}
+.ig-activity-box summary::-webkit-details-marker{display:none}
+.ig-activity-box summary:hover{background:color-mix(in oklch,var(--fg) 3%,transparent)}
+.ig-act-title{font-weight:600}
+.ig-activity-box summary .muted{flex:1;font-variant-numeric:tabular-nums}
+.ig-activity-box summary svg{width:14px;height:14px;color:var(--fg-3);transition:transform .25s var(--ease-out)}
+.ig-activity-box[open] summary svg{transform:rotate(180deg)}
+.ig-activity{display:flex;flex-direction:column;gap:2px;padding:0 12px 12px;font-size:12.5px}
+.ig-activity-box[open] .ig-activity{animation:igFadeUp .26s var(--ease-out)}
+.ig-act-item{border-bottom:1px solid var(--line)}
+.ig-act-item:last-child{border-bottom:0}
+.ig-act-row{display:grid;grid-template-columns:62px minmax(0,200px) minmax(0,1fr) 64px 14px;gap:10px;align-items:center;
+  padding:6px 4px;background:var(--bg-2)}
+.ig-act-row .c{width:12px;height:12px;color:var(--fg-4);transition:transform .25s var(--ease-out),color .15s var(--ease-out)}
+.ig-act-row:hover .c{color:var(--fg-2)}
+.ig-act-item.open .ig-act-row .c{transform:rotate(180deg)}
+/* Open, a row says all of it and shows its steps. */
+.ig-act-item.open .ig-act-row .d{white-space:normal;overflow-wrap:anywhere}
+.ig-act-more{padding:4px 4px 12px 76px;animation:igFadeUp .22s var(--ease-out)}
+.ig-run-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.ig-run-report{margin-left:auto;font-size:12px;color:var(--fg-3);text-decoration:underline;text-underline-offset:2px}
+.ig-run-report:hover{color:var(--fg)}
+@media (max-width:560px){
+  /* Time, name and outcome on one line; what happened under it, whole. */
+  .ig-act-row{grid-template-columns:auto minmax(0,1fr) auto 12px;grid-template-areas:"t n s c" "d d d d";row-gap:3px}
+  .ig-act-row .t{grid-area:t}.ig-act-row .n{grid-area:n}.ig-act-row .s{grid-area:s}.ig-act-row .c{grid-area:c}
+  .ig-act-row .d{grid-area:d;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+  .ig-act-item.open .ig-act-row .d{display:block}
+  .ig-act-more{padding-left:4px}
+  .ig-run div{grid-template-columns:auto minmax(0,1fr);row-gap:2px}
+  .ig-run .d{grid-column:1/-1}
+}
+.ig-activity .t{color:var(--fg-4);font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums}
+.ig-act-row .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-act-row .d{color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-act-row .s{text-align:right;font-size:11.5px}
+.ig-activity .ok{color:var(--live)}.ig-activity .failed{color:var(--danger)}.ig-activity .stopped,.ig-activity .busy{color:var(--fg-3)}
+.ig-act-empty{padding:6px 4px;color:var(--fg-3)}
+/* Modal shell. */
+.ig-modal .dest-form:focus{outline:none}
+.ig-modal.closing .ic-modal-backdrop{animation:igFadeOut .18s var(--ease-out) forwards}
+.ig-modal.closing .dest-form{animation:igModalOut .18s var(--ease-out) forwards}
+@keyframes igFadeOut{to{opacity:0}}
+@keyframes igModalOut{to{opacity:0;transform:translateY(6px) scale(.98)}}
+.ig-modal .ic-btn:disabled:not(.is-busy){opacity:.45;cursor:not-allowed;box-shadow:none}
+.ig-modal .dest-form-x svg{width:14px;height:14px}
+.ig-modal .dest-form-x{display:grid;place-items:center}
+.ig-title-input{width:100%;max-width:420px;padding:2px 6px;margin:-2px -6px;border:1px solid transparent;border-radius:7px;
+  background:transparent;color:var(--fg);font:inherit;font-weight:600;outline:none;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),box-shadow .2s var(--ease-out)}
+.ig-title-input:hover{background:color-mix(in oklch,var(--fg) 4%,transparent)}
+.ig-title-input:focus{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:var(--bg-1);
+  box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 16%,transparent)}
+.ig-head-btn{padding:8px 14px}
+.ig-foot-msg{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;min-width:0}
+.ig-foot-msg>.ig-last{flex:none}
+.ig-last{display:inline-flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-last i{width:6px;height:6px;flex:none;border-radius:50%;background:var(--fg-4)}
+.ig-last.ok i{background:var(--live)}.ig-last.bad i{background:var(--danger)}
+/* The last run opens onto its steps, in a card over the footer. */
+.ig-modal .dest-form-foot{position:relative}
+.ig-last-btn{padding:3px 7px;margin:-3px -7px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;cursor:pointer;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out)}
+.ig-last-btn:hover,.ig-last-btn[aria-expanded="true"]{background:var(--surface-3);color:var(--fg)}
+.ig-last-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.ig-last-btn svg{width:12px;height:12px;flex:none;transition:transform .25s var(--ease-out)}
+.ig-last-btn[aria-expanded="true"] svg{transform:rotate(180deg)}
+.ig-lastrun{position:absolute;left:12px;bottom:calc(100% + 8px);z-index:6;width:min(600px,calc(100% - 24px));
+  max-height:min(52vh,380px);overflow-y:auto;overscroll-behavior:contain;padding:12px 14px;border-radius:12px;
+  background:var(--bg-2);border:1px solid var(--line-2);box-shadow:0 18px 40px -16px rgba(0,0,0,.7);
+  transform-origin:bottom left;animation:igLastRunIn .2s var(--ease-out)}
+@keyframes igLastRunIn{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+.ig-lastrun-head{display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:13px}
+.ig-lastrun-head .muted{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.ig-lastrun .ig-run div:last-child{border-bottom:0}
+/* A variable nothing fills: said calmly, with the fix one click away. */
+.ig-unknown{display:flex;flex-direction:column;gap:6px;padding:9px 11px;border-radius:9px;font-size:12.5px;line-height:1.5;color:var(--fg-2);
+  background:color-mix(in oklch,var(--warn) 7%,transparent);border:1px solid color-mix(in oklch,var(--warn) 22%,transparent);
+  animation:igFadeUp .22s var(--ease-out)}
+.ig-unknown>div{display:flex;align-items:flex-start;gap:8px}
+.ig-unknown svg{width:13px;height:13px;flex:none;margin-top:3px;color:var(--warn)}
+.ig-unknown code{font-family:var(--mono);font-size:11.5px;color:var(--warn)}
+.ig-fixvar{padding:0 6px;border:1px solid color-mix(in oklch,var(--accent) 40%,transparent);border-radius:6px;
+  background:color-mix(in oklch,var(--accent) 10%,transparent);color:var(--accent);font-family:var(--mono);font-size:11.5px;
+  cursor:pointer;transition:background-color .15s var(--ease-out)}
+.ig-fixvar:hover{background:color-mix(in oklch,var(--accent) 20%,transparent)}
+.ig-fixvar:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media (prefers-reduced-motion: reduce){.ig-lastrun,.ig-unknown,.ig-act-more{animation:none}.ig-last-btn svg,.ig-act-row .c{transition:none}}
+.ig-discard{animation:igFadeUp .2s var(--ease-out)}
+.ig-unsaved{flex:none;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;color:var(--warn);
+  background:color-mix(in oklch,var(--warn) 12%,transparent);border:1px solid color-mix(in oklch,var(--warn) 35%,transparent);
+  animation:igPop .26s cubic-bezier(.2,0,0,1)}
+.ig-del{color:var(--fg-3)}
+.ig-del:hover:not(:disabled){color:var(--danger)}
+.ig-guard{position:absolute;left:12px;right:12px;bottom:10px;z-index:5;display:flex;align-items:center;gap:8px;
+  padding:10px 10px 10px 14px;border-radius:12px;background:color-mix(in oklch,var(--warn) 10%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--warn) 40%,var(--line));box-shadow:0 18px 40px -16px rgba(0,0,0,.7);
+  animation:igGuardIn .24s var(--ease-out)}
+.ig-guard-text{flex:1;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
+.ig-guard-text svg{width:16px;height:16px;flex:none;color:var(--warn)}
+@keyframes igGuardIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+/* Message previews, styled like where they land. */
+.ig-pv{flex:1;min-width:0;font-size:11.5px;line-height:1.4}
+.ig-pv-col{min-width:0}
+.ig-pv-discord{display:flex;gap:8px;padding:8px 9px;border-radius:8px;background:#313338}
+.ig-pv-discord .ig-av{width:22px;height:22px;flex:none;border-radius:50%;background:var(--accent);
+  display:grid;place-items:center;color:#051018}
+.ig-pv-discord .ig-av svg{width:11px;height:11px}
+.ig-pv-discord b{color:#f2f3f5;font-weight:600}
+.ig-pv-discord .ig-app{padding:0 3px;margin-left:4px;border-radius:3px;background:#5865f2;color:#fff;font-size:10px;font-weight:500;vertical-align:1px}
+.ig-pv-discord .ig-txt{color:#dbdee1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.ig-pv-chat{display:flex;flex-direction:column;gap:3px;padding:8px 9px;border-radius:8px;background:#18181b;color:#efeff1}
+.ig-pv-chat div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-pv-chat .u1{font-weight:700;color:#ff7eb6}
+.ig-pv-chat .u2{font-weight:700;color:#5ac8fa}
+.ig-pv-phone{display:flex;gap:8px;padding:8px 9px;border-radius:12px;background:rgba(255,255,255,.08)}
+.ig-pv-phone .ig-av{width:22px;height:22px;flex:none;border-radius:6px;background:var(--accent)}
+.ig-pv-phone small{display:block;font-size:9.5px;letter-spacing:.04em;color:var(--fg-3)}
+.ig-pv-phone b{font-weight:600}
+.ig-pv-json{font-family:var(--mono);font-size:10.5px;color:var(--fg-2);white-space:pre;overflow:hidden}
+.ig-pv-json .k{color:var(--accent)}
+.ig-pv-marker{display:flex;flex-direction:column;gap:7px}
+.ig-pv-marker .tag{align-self:center;padding:2px 7px;border-radius:5px;background:#9146ff;color:#fff;font-size:10px;font-weight:600;
+  max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-pv-marker .bar{position:relative;height:5px;border-radius:3px;background:var(--surface-3)}
+.ig-pv-marker .bar i{position:absolute;left:0;top:0;width:70%;height:5px;border-radius:3px;background:var(--fg-3)}
+.ig-pv-marker .bar b{position:absolute;top:-4px;width:3px;height:13px;border-radius:2px;background:#a78bfa}
+.ig-pv-file{display:flex;align-items:center;gap:10px}
+.ig-pv-file code{padding:5px 8px;border-radius:6px;background:var(--surface-3);font-size:10.5px;color:var(--fg-3)}
+.ig-pv-file span{padding:5px 9px;border-radius:6px;background:#000;color:#fff;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-pv-action{display:flex;align-items:center;gap:10px;color:var(--fg-2);font-size:12px}
+.ig-pv-action span{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none;
+  background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));color:var(--accent)}
+.ig-pv-action svg{width:15px;height:15px}
+.ig-pv.big{font-size:14px}
+.ig-pv.big.ig-pv-discord,.ig-pv.big.ig-pv-chat,.ig-pv.big.ig-pv-phone{padding:14px;gap:12px}
+.ig-pv.big .ig-av{width:40px;height:40px}
+.ig-pv.big .ig-av svg{width:18px;height:18px}
+.ig-pv.big .ig-txt{display:block;-webkit-line-clamp:unset}
+.ig-pv.big.ig-pv-chat div{white-space:normal}
+/* Module editor: the live preview you write on. */
+.ig-ed-body{padding:20px 24px 22px;gap:18px}
+.ig-ed-preview{display:flex;flex-direction:column}
+.ig-ed-pv{display:flex;flex-direction:column;gap:10px}
+.ig-live{border-radius:14px;overflow:hidden}
+.ig-live-tag{font-size:10.5px;font-weight:700;letter-spacing:.06em;color:#adadb8}
+.ig-live-discord{background:#313338;color:#dbdee1}
+.ig-live-head{height:40px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid rgba(0,0,0,.3);
+  color:#f2f3f5;font-size:14px;font-weight:600}
+.ig-live-head .hash{color:#80848e;font-size:18px;font-weight:400}
+.ig-live-head .ig-live-tag{margin-left:auto;font-weight:500;letter-spacing:0;color:#949ba4}
+.ig-live-msg{display:flex;gap:14px;padding:16px}
+.ig-live-av{width:40px;height:40px;flex:none;border-radius:50%;background:var(--accent);display:grid;place-items:center;color:#051018}
+.ig-live-av svg{width:18px;height:18px}
+.ig-live-col{flex:1;min-width:0;font-size:14.5px}
+.ig-live-meta{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.ig-live-meta b{color:#f2f3f5}
+.ig-live-meta .ig-app{padding:0 4px;border-radius:3px;background:#5865f2;color:#fff;font-size:10px;font-weight:500}
+.ig-ping{padding:0 4px;border-radius:3px;background:rgba(88,101,242,.3);color:#c9cdfb;font-size:12px;animation:igPop .26s cubic-bezier(.2,0,0,1)}
+.ig-live-chat{background:#18181b;padding:14px 16px;color:#efeff1;font-size:14px;display:flex;flex-direction:column;gap:8px}
+.ig-live-chat .u1{color:#ff7eb6}.ig-live-chat .u2{color:#5ac8fa}
+.ig-live-phone{border-radius:22px;background:#1d2530;padding:18px;display:flex;flex-direction:column;gap:10px;color:#fff}
+.ig-live-phone .ig-live-tag{color:rgba(255,255,255,.7);font-weight:500}
+.ig-live-phone .ic-input{background:rgba(255,255,255,.08)}
+.ig-live-plain{padding:14px 16px;display:flex;flex-direction:column;gap:10px;border-radius:12px}
+/* An alert in the editor: the real alerts page on a short stage, then
+   what it says. */
+.ig-live-alert{padding:12px 14px 14px;display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);background:var(--bg-1)}
+.ig-live-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px}
+.ig-live-alert .ig-live-tag{color:var(--fg-3)}
+.ig-live-theme{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--fg-3)}
+.ig-link{position:relative;display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;color:var(--accent);font:inherit;font-size:12px;cursor:pointer}
+.ig-link::before{content:"";position:absolute;inset:-8px -3px}
+.ig-link:hover{text-decoration:underline}
+.ig-link .ig-btn-ic{width:12px;height:12px}
+.ig-ed-stage{position:relative;height:190px;overflow:hidden;border-radius:10px;
+  background:radial-gradient(90% 140% at 30% 10%,#33415a 0%,#1a2130 55%,#0e1219 100%)}
+.ig-alert-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:10px}
+@media (max-width:640px){.ig-alert-fields{grid-template-columns:1fr}}
+.ig-alerts-status{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:9px 12px;border-radius:10px;
+  border:1px solid var(--line);background:var(--bg-1);font-size:12.5px}
+.ig-alerts-line{flex:1;min-width:12em}
+/* The real page, scaled into a box: the box sets the size, the frame
+   inside is laid out at the page's own width (see stageShow). Its
+   color-scheme matches the page, or Chrome paints an opaque backdrop. */
+.ig-stage{position:relative;aspect-ratio:16/9;overflow:hidden;border-radius:12px;border:1px solid var(--line);
+  background:radial-gradient(90% 120% at 30% 20%,#33415a 0%,#1a2130 50%,#0e1219 100%)}
+.ig-stage-short{aspect-ratio:auto;height:180px}
+.ig-stage-frame{position:absolute;left:0;top:0;border:0;transform-origin:0 0;pointer-events:none;background:transparent;color-scheme:normal}
+/* Connections: one card each, opened in place. */
+.ig-cxs{display:flex;flex-direction:column;gap:8px}
+.ig-cx{border:1px solid var(--line);border-radius:12px;background:var(--bg-1);overflow:hidden;
+  transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out)}
+.ig-cx.open{border-color:color-mix(in oklch,var(--accent) 35%,var(--line));background:var(--surface-2,var(--bg-1))}
+.ig-cx-head{width:100%;display:flex;align-items:center;gap:12px;padding:12px 14px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.ig-cx-head:hover{background:color-mix(in oklch,var(--fg) 3%,transparent)}
+.ig-cx-head:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.ig-cx-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.ig-cx-id b{font-size:14px;font-weight:600}
+.ig-cx-id span{font-size:12px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-cx-chev{display:grid;color:var(--fg-3);transition:transform .25s var(--ease-out)}
+.ig-cx-chev svg{width:16px;height:16px}
+.ig-cx.open .ig-cx-chev{transform:rotate(180deg)}
+.ig-cx-in{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px}
+.ig-cx-in .sys-section{margin:0;padding:0;border:0;background:transparent}
+.ig-ic-phone{--dc:#f0a53a}.ig-ic-obs{--dc:#8b949e}.ig-ic-stream{--dc:#5ac8fa}
+@media (max-width:560px){.ig-cx-id span{white-space:normal}}
+.ig-look-sum{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);font-size:13px}
+.ig-look-dot{width:14px;height:14px;flex:none;border-radius:50%;background:var(--sw);box-shadow:0 0 0 3px color-mix(in oklch,var(--sw) 25%,transparent)}
+.ig-look-sum-t{flex:1;min-width:12em}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range]){-webkit-appearance:none;appearance:none;height:22px;margin:0;background:transparent;cursor:pointer;--p:50%}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range])::-webkit-slider-runnable-track{height:6px;border-radius:99px;
+  background:linear-gradient(90deg,var(--accent) 0 var(--p),var(--surface-3) var(--p) 100%)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range])::-moz-range-track{height:6px;border-radius:99px;background:var(--surface-3)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range])::-moz-range-progress{height:6px;border-radius:99px;background:var(--accent)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range])::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;margin-top:-5px;border-radius:50%;
+  background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.25),0 2px 6px rgba(0,0,0,.45);
+  transition:transform .2s var(--ease-spring),box-shadow .2s var(--ease-out)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range])::-moz-range-thumb{width:16px;height:16px;border:0;border-radius:50%;background:#fff;
+  box-shadow:0 0 0 1px rgba(0,0,0,.25),0 2px 6px rgba(0,0,0,.45);transition:transform .2s var(--ease-spring),box-shadow .2s var(--ease-out)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range]):hover::-webkit-slider-thumb{transform:scale(1.12)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range]):active::-webkit-slider-thumb{transform:scale(1.25);box-shadow:0 0 0 6px color-mix(in oklch,var(--accent) 25%,transparent),0 2px 6px rgba(0,0,0,.45)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range]):hover::-moz-range-thumb{transform:scale(1.12)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range]):active::-moz-range-thumb{transform:scale(1.25);box-shadow:0 0 0 6px color-mix(in oklch,var(--accent) 25%,transparent),0 2px 6px rgba(0,0,0,.45)}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range]):focus-visible{outline:0}
+:is(.ig-modal input[type=range],.crash-range,.st-modal input[type=range]):focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 55%,transparent)}
+.ig-sounds,.ig-pics{display:flex;flex-wrap:wrap;gap:6px}
+.ig-sound{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);
+  background:transparent;color:var(--fg-2);font:inherit;font-size:12.5px;cursor:pointer;
+  transition:border-color .15s var(--ease-out),color .15s var(--ease-out),background-color .15s var(--ease-out),transform .2s var(--ease-spring)}
+.ig-sound:hover{color:var(--fg);border-color:var(--line-2)}
+.ig-sound.on{color:var(--fg);border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:color-mix(in oklch,var(--accent) 14%,transparent)}
+.ig-sound .ig-btn-ic{width:11px;height:11px}
+.ig-sound:active{transform:scale(.95)}
+.ig-sound.ig-playing .ig-btn-ic{animation:igPlaying .3s ease-in-out 4 alternate}
+.ig-sound.ig-playing{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 18%,transparent)}
+@keyframes igPlaying{to{transform:scale(1.35)}}
+.ig-upload{border-style:dashed}
+.ig-media-item{position:relative;display:inline-flex}
+.ig-media-x{position:absolute;top:-6px;right:-6px;width:18px;height:18px;display:grid;place-items:center;padding:0;border-radius:50%;
+  border:1px solid var(--line-2);background:var(--bg-2);color:var(--fg-3);cursor:pointer;opacity:0;transition:opacity .15s var(--ease-out)}
+.ig-media-x svg{width:10px;height:10px}
+.ig-media-item:hover .ig-media-x,.ig-media-x:focus-visible,.ig-media-x.ig-armed{opacity:1}
+.ig-media-x.ig-armed{width:auto;padding:0 6px;border-radius:999px;color:var(--danger);font-size:11px}
+.ig-pic{width:64px;height:64px;display:grid;place-items:center;gap:2px;padding:0;overflow:hidden;border-radius:10px;border:1px solid var(--line);
+  background:var(--bg-1);color:var(--fg-3);font:inherit;font-size:11.5px;cursor:pointer}
+.ig-pic img{width:100%;height:100%;object-fit:cover}
+.ig-pic svg{width:16px;height:16px}
+.ig-pic.on{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in oklch,var(--accent) 30%,transparent)}
+.ig-volume{display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:12.5px}
+.ig-tiers{display:flex;flex-direction:column;gap:6px}
+.ig-step-meta{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11.5px;color:var(--fg-3)}
+.ig-step-meta i{width:9px;height:9px;border-radius:50%;background:var(--sw);box-shadow:0 0 0 1px rgba(255,255,255,.18)}
+.ig-bld-alert .ig-live-row{justify-content:space-between}
+.ig-tier{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-height:40px;padding:4px 6px 4px 12px;border-radius:10px;
+  background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line)}
+.ig-tier.on{box-shadow:inset 0 0 0 1px var(--accent)}
+.ig-tier-what{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;font-size:13px}
+.ig-tier-what span{white-space:nowrap}
+.ig-tier-from{width:64px;padding:4px 8px;font-variant-numeric:tabular-nums}
+.ig-tier-look{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:30%}
+.ig-volume input[type=range]{flex:1;min-width:120px}
+.ig-volume .mono{min-width:3.2em;color:var(--fg-3)}
+.ig-recipe-alerts{display:flex;flex-direction:column;gap:10px}
+/* Values: a few under the field being written in (.ig-vstrip), the rest in
+   a searchable menu (.ig-vmenu, see ValuePick in integrations.js). */
+.ig-vstrip{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:8px 0 2px;padding:7px 9px;border-radius:10px;
+  background:color-mix(in oklch,var(--accent) 6%,var(--bg-2));border:1px solid color-mix(in oklch,var(--accent) 22%,var(--line));
+  animation:igValuesIn .18s var(--ease-out)}
+@keyframes igValuesIn{from{opacity:0;transform:translateY(-3px)}}
+.ig-vstrip-h{font-size:11.5px;font-weight:600;color:var(--accent);margin-right:2px}
+.ig-vchip{display:inline-flex;align-items:baseline;gap:6px;max-width:100%;min-width:0;padding:3px 10px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line-2);background:var(--surface-3);color:var(--fg);font:500 12px/1.6 inherit;
+  transition:background-color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-vchip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-3);font-weight:400}
+.ig-vchip:hover,.ig-vchip:focus-visible{border-color:color-mix(in oklch,var(--accent) 50%,transparent);background:color-mix(in oklch,var(--accent) 12%,var(--surface-3))}
+.ig-vchip:active{transform:scale(.96)}
+.ig-vchip.more{background:transparent;border-style:dashed;color:var(--fg-2)}
+.ig-vstrip-k{margin-left:auto;font-size:11.5px;color:var(--fg-4);white-space:nowrap}
+.ig-vstrip-k code{font-family:var(--mono);color:var(--fg-2)}
+.ig-vmenu{position:fixed;z-index:2050;width:min(380px,calc(100vw - 16px));display:none;flex-direction:column;padding:8px;border-radius:12px;
+  background:var(--bg-2);border:1px solid var(--line-2);box-shadow:0 18px 44px -14px rgba(0,0,0,.8)}
+.ig-vmenu.on{display:flex;animation:igValuesIn .14s var(--ease-out)}
+.ig-vmenu-find{display:flex;align-items:center;gap:8px;padding:2px 6px 8px;border-bottom:1px solid var(--line)}
+.ig-vmenu.typed .ig-vmenu-find{display:none}
+.ig-vmenu-find svg{width:14px;height:14px;flex:none;color:var(--fg-4)}
+.ig-vmenu-find input{flex:1;min-width:0;padding:6px 0;border:0;outline:0;background:transparent;color:var(--fg);font:inherit;font-size:13px}
+.ig-vmenu-n{font:500 11px/1 var(--mono);color:var(--fg-4)}
+.ig-vmenu-list{max-height:min(320px,50vh);overflow-y:auto;overscroll-behavior:contain;padding-top:2px}
+.ig-vmenu-g{padding:9px 8px 4px;font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-4)}
+.ig-vmenu-g code{font:500 10.5px/1.5 var(--mono);letter-spacing:0;text-transform:none;color:var(--fg-2);
+  background:var(--surface-3);padding:0 5px;border-radius:4px}
+.ig-vmenu-i{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;border:0;border-radius:8px;background:transparent;
+  color:var(--fg-2);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.ig-vmenu-i>span{display:flex;flex-direction:column;min-width:0;flex:1}
+.ig-vmenu-i b{color:var(--fg);font-weight:600}
+.ig-vmenu-i small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--fg-4)}
+.ig-vmenu-i small code{font:500 11px/1.5 var(--mono);color:var(--fg-3);margin-right:4px}
+.ig-vmenu-i em{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:normal 11.5px/1.5 var(--mono);color:var(--fg-3)}
+.ig-vmenu-i mark{background:none;color:var(--accent)}
+.ig-vmenu-i:hover,.ig-vmenu-i.on{background:var(--surface-3)}
+.ig-vmenu-none{padding:16px 8px;font-size:12.5px;color:var(--fg-3);text-align:center}
+.ig-vmenu-foot{padding:8px 6px 0;margin-top:4px;border-top:1px solid var(--line);font-size:11px;color:var(--fg-4)}
+@media (prefers-reduced-motion:reduce){.ig-vstrip,.ig-vmenu.on{animation:none}}
+.ig-msg{width:100%;box-sizing:border-box;resize:none;overflow:hidden;min-height:48px;padding:8px 10px;margin:0;
+  border-radius:8px;border:1px dashed color-mix(in oklch,var(--accent) 55%,transparent);
+  background:color-mix(in oklch,var(--accent) 5%,transparent);color:inherit;font:inherit;line-height:1.5;outline:none;
+  transition:border-color .15s var(--ease-out),box-shadow .2s var(--ease-out),background-color .15s var(--ease-out)}
+.ig-msg:hover{background:color-mix(in oklch,var(--accent) 8%,transparent)}
+.ig-msg:focus{border-style:solid;box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 18%,transparent)}
+.ig-sample{margin-top:6px;font-size:12px;color:#949ba4}
+.ig-sample.empty{display:none}
+.ig-sample.ig-instead{margin-top:3px}
+.ig-sample.ig-instead b{color:#f0b232}
+.ig-sample b{color:#b5bac1;font-weight:500}
+/* Moments timeline. */
+.ig-moments{position:relative;display:grid;grid-template-columns:repeat(var(--n,4),minmax(0,1fr));gap:4px}
+.ig-moments::before{content:'';position:absolute;left:calc(50% / var(--n,4));right:calc(50% / var(--n,4));top:11px;height:2px;background:var(--line-2)}
+.ig-moment{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
+.ig-dot{position:relative;width:24px;height:24px;padding:0;border-radius:50%;border:2px solid var(--line-2);background:var(--surface-3);
+  box-shadow:0 0 0 4px var(--bg-2);cursor:pointer;display:grid;place-items:center;color:var(--accent-ink);
+  transition:background-color .2s var(--ease-out),border-color .2s var(--ease-out),transform .15s var(--ease-out)}
+.ig-dot::after{content:'';position:absolute;inset:-9px}
+.ig-dot:active{transform:scale(.96)}
+.ig-dot svg{width:12px;height:12px;opacity:0;transform:scale(.25);filter:blur(4px);
+  transition:opacity .2s cubic-bezier(.2,0,0,1),transform .2s cubic-bezier(.2,0,0,1),filter .2s cubic-bezier(.2,0,0,1)}
+.ig-dot.on{background:var(--accent);border-color:var(--accent)}
+.ig-dot.on svg{opacity:1;transform:none;filter:blur(0)}
+.ig-moment-name{max-width:100%;padding:5px 12px;border-radius:999px;border:1px solid transparent;background:transparent;
+  color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:background-color .2s var(--ease-out),border-color .2s var(--ease-out),color .2s var(--ease-out)}
+.ig-moment-name:hover{color:var(--fg)}
+.ig-moment-name.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--fg)}
+.ig-mchips{display:flex;flex-wrap:wrap;gap:6px}
+.ig-mchip{display:inline-flex;align-items:center;gap:4px;padding:3px 3px 3px 4px;border-radius:999px;border:1px solid var(--line);background:var(--bg-1);
+  transition:background-color .2s var(--ease-out),border-color .2s var(--ease-out)}
+.ig-mchip .ig-dot{width:20px;height:20px;box-shadow:none}
+.ig-mchip .ig-dot::after{inset:-6px}
+.ig-mchip .ig-dot svg{width:10px;height:10px}
+.ig-mchip-name{padding:4px 10px 4px 4px;border:0;background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:color .2s var(--ease-out)}
+.ig-mchip-name:hover{color:var(--fg)}
+.ig-mchip.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));border-color:color-mix(in oklch,var(--accent) 55%,transparent)}
+.ig-mchip.on .ig-mchip-name{color:var(--fg)}
+/* Undo and redo in an editor's footer. */
+.ig-history{display:inline-flex;gap:2px;flex:0 0 auto}
+.ig-history .ic-btn-tiny svg{width:14px;height:14px}
+.ig-history .ic-btn-tiny:disabled{opacity:.35;cursor:default}
+/* Remove a moment: beside its switch, there on hover and on the open one. */
+.ig-moment-del{display:grid;place-items:center;width:20px;height:20px;padding:0;border-radius:50%;border:1px solid var(--line-2);
+  background:var(--surface-3);color:var(--fg-3);cursor:pointer;opacity:0;
+  transition:opacity .15s var(--ease-out),color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-moment-del svg{width:10px;height:10px}
+.ig-moment-del::before{content:"";position:absolute;inset:-7px}
+.ig-moment-del:hover,.ig-moment-del:focus-visible{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 55%,transparent);opacity:1}
+.ig-moment-del:active{transform:scale(.92)}
+.ig-moment .ig-moment-del{position:absolute;top:-1px;left:calc(50% + 22px)}
+.ig-mchip .ig-moment-del{position:relative;width:18px;height:18px;margin-left:-4px;border-color:transparent;background:none}
+:is(.ig-moment,.ig-mchip):is(:hover,.on,:focus-within) .ig-moment-del{opacity:1}
+@media (hover:none){.ig-moment-del{opacity:1}}
+/* The simple editor's parts, numbered in reading order: the moments, what
+   it says or does, its options. */
+.ig-ed-sect{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin:0 0 10px;font-size:13.5px;color:var(--fg)}
+.ig-ed-sect b{font-weight:600}
+.ig-ed-sect-s{color:var(--fg-3);font-size:12px}
+.ig-ed-num{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;flex:none;font-size:11px;font-weight:700;
+  color:var(--accent);background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));border:1px solid color-mix(in oklch,var(--accent) 40%,transparent)}
+.ig-ed-body>.ig-moments,.ig-ed-body>.ig-mchips{margin-bottom:22px}
+/* A moment's switch, drawn as one: a knob that slides on. */
+.ig-ed-body .ig-dot{width:30px;height:18px;border-radius:999px;background:var(--surface-3);border:1.5px solid var(--line-2)}
+.ig-ed-body .ig-dot svg{display:none}
+.ig-ed-body .ig-dot::before{content:'';position:absolute;left:2px;top:50%;width:11px;height:11px;margin-top:-5.5px;border-radius:50%;
+  background:var(--fg-3);transition:transform .2s var(--ease-out),background-color .2s var(--ease-out)}
+.ig-ed-body .ig-dot.on{background:var(--accent);border-color:var(--accent)}
+.ig-ed-body .ig-dot.on::before{transform:translateX(12px);background:var(--accent-ink)}
+.ig-ed-body .ig-mchip .ig-dot{width:30px;height:18px}
+.ig-ed-body .ig-moments::before{top:9px}
+/* The simple editor: the preview you write on, and its options beside it
+   as rows. The open row's settings sit right under it. */
+.ig-ed-cols{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
+.ig-ed-main{display:flex;flex-direction:column;gap:14px;min-width:0}
+.ig-ed-side{position:sticky;top:0;display:flex;flex-direction:column;gap:14px;padding:14px;border-radius:14px;
+  background:var(--bg-2);border:1px solid var(--line)}
+.ig-side-fix{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:start;padding:12px;border-radius:10px;font-size:12.5px;line-height:1.45;
+  color:var(--fg-2);background:color-mix(in oklch,var(--warn) 9%,var(--bg-1));border:1px solid color-mix(in oklch,var(--warn) 40%,transparent)}
+.ig-side-fix svg{width:14px;height:14px;margin-top:2px;color:var(--warn)}
+.ig-side-fix b{display:block;font-weight:600;color:var(--warn)}
+.ig-side-fix .ic-btn{grid-column:2;justify-self:start;margin-top:4px}
+.ig-side-g{display:flex;flex-direction:column;gap:6px}
+.ig-side-g+.ig-side-g{padding-top:12px;border-top:1px solid var(--line)}
+.ig-side-h{font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-4)}
+.ig-opt{display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border-radius:9px;border:1px solid var(--line);
+  background:var(--surface-3);color:var(--fg);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-opt:hover{border-color:var(--line-2)}
+.ig-opt:active{transform:scale(.98)}
+.ig-opt span{flex:none;color:var(--fg-3)}
+.ig-opt b{flex:1;min-width:0;text-align:right;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-opt svg{width:11px;height:11px;flex:none;color:var(--fg-3);transition:transform .25s var(--ease-out),color .15s var(--ease-out)}
+.ig-opt.warn{border-color:color-mix(in oklch,var(--warn) 55%,transparent);background:color-mix(in oklch,var(--warn) 9%,var(--surface-3))}
+.ig-opt.warn b{color:var(--warn)}
+.ig-opt.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 12%,var(--surface-3));
+  border-bottom-left-radius:0;border-bottom-right-radius:0}
+.ig-opt.on svg{transform:rotate(180deg);color:var(--accent)}
+.ig-opt-pop{margin-top:-6px;padding:12px;border:1px solid color-mix(in oklch,var(--accent) 35%,var(--line));border-top:0;
+  border-radius:0 0 9px 9px;background:var(--bg-1)}
+/* The row above already names it. */
+.ig-opt-pop>.ic-label:first-child{display:none}
+@media (max-width:980px){.ig-ed-cols{grid-template-columns:1fr}.ig-ed-side{position:static}}
+.ig-pop{overflow:hidden;box-sizing:border-box;border-radius:12px;background:var(--bg-2);border:1px solid var(--line)}
+.ig-pop-in{display:flex;flex-direction:column;gap:10px;padding:14px 16px}
+.ig-pop-in .ig-seg{align-self:flex-start}
+.ig-pick{display:flex;flex-wrap:wrap;gap:8px}
+.ig-pick .dest-starter{--dc:#a5b4fc;padding:10px 14px;gap:2px}
+.ig-pick .dest-starter-name{font-size:13px}
+.ig-pick .dest-starter.on{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 20%,transparent)}
+.ig-pick-add{min-height:0;padding:10px 16px;flex-direction:row;gap:6px}
+.ig-pick-add svg{width:14px;height:14px}
+/* Checkbox rows: undo the destination form's uppercase field labels. */
+.ig-modal .crash-check{display:flex;margin:0;font-size:13px;font-weight:400;color:var(--fg);text-transform:none;letter-spacing:0}
+.ig-modal .crash-check .muted{font-size:12px}
+/* Who can use it: toggle pills. */
+.ig-roles{display:flex;flex-wrap:wrap;gap:6px}
+.dest-form .ig-role{position:relative;display:inline-flex;margin:0;cursor:pointer;font-size:inherit;color:inherit;
+  text-transform:none;letter-spacing:0}
+.ig-role input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.ig-role>span{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);
+  background:var(--surface-3);font-size:12.5px;font-weight:500;color:var(--fg-2);
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-role>span svg{width:12px;height:12px;margin-left:-18px;opacity:0;transform:scale(.25);filter:blur(4px);
+  transition:opacity .2s cubic-bezier(.2,0,0,1),transform .2s cubic-bezier(.2,0,0,1),filter .2s cubic-bezier(.2,0,0,1),margin .2s cubic-bezier(.2,0,0,1)}
+.ig-role input:checked+span{border-color:color-mix(in oklch,var(--accent) 55%,transparent);
+  background:color-mix(in oklch,var(--accent) 12%,var(--surface-3));color:var(--fg)}
+.ig-role input:checked+span svg{margin-left:0;opacity:1;transform:none;filter:blur(0);color:var(--accent)}
+.ig-role input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+.ig-role:active>span{transform:scale(.96)}
+/* Catalog. */
+.ig-cat{flex:1;min-height:0;display:flex}
+.ig-cat-nav{width:200px;flex:none;padding:16px 12px;display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line)}
+/* The catalog's search: above the categories and the tiles. */
+.ig-cat-acts{display:flex;gap:8px;margin-left:auto}
+.ig-cat-acts .ic-btn svg{width:13px;height:13px}
+.ig-cat-find{display:flex;align-items:center;gap:10px;margin:14px 20px 0;padding:0 12px;border-radius:10px;
+  border:1px solid var(--line-2);background:var(--bg-1);transition:border-color .15s var(--ease-out),box-shadow .15s var(--ease-out)}
+.ig-cat-find:focus-within{border-color:color-mix(in oklch,var(--accent) 55%,var(--line-2));box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 14%,transparent)}
+.ig-cat-find svg{width:15px;height:15px;flex:none;color:var(--fg-4)}
+.ig-cat-find input{flex:1;min-width:0;padding:11px 0;border:0;outline:0;background:transparent;color:var(--fg);font:inherit;font-size:14px}
+.ig-cat-find input::placeholder{color:var(--fg-4)}
+.ig-cat-find kbd{padding:1px 7px;border-radius:5px;border:1px solid var(--line-2);font:500 11px/1.5 var(--mono);color:var(--fg-3)}
+.ig-cat-clear{border:0;background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;cursor:pointer;padding:4px 2px}
+.ig-cat-clear:hover{color:var(--fg)}
+.ig-cat-nav button{display:flex;gap:9px;align-items:center;padding:8px 10px;border-radius:8px;
+  border:1px solid transparent;background:transparent;color:var(--fg-3);font:inherit;font-size:13px;font-weight:500;cursor:pointer;text-align:left;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-cat-nav button:hover{color:var(--fg);background:color-mix(in oklch,var(--fg) 4%,transparent)}
+.ig-cat-nav button:active{transform:scale(.96)}
+.ig-cat-nav button.on{background:var(--surface-3);border-color:var(--line-2);color:var(--fg)}
+.ig-cat-nav button svg{width:15px;height:15px;flex:none}
+.ig-cat-nav button small{margin-left:auto;color:var(--fg-4);font-variant-numeric:tabular-nums}
+.ig-cat-nav button.none:not(.on){opacity:.45}
+.ig-cat-grid{flex:1;min-width:0;overflow-y:auto;padding:16px 18px 20px;display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;align-content:start;
+  /* Rows as tall as their tiles. Plain auto rows shrink to share the
+     grid's fixed height once there are more tiles than fit, and the
+     tiles (overflow hidden) lose their buttons. */
+  grid-auto-rows:max-content}
+/* A category's tiles fade in one after another; tiles already shown stay. */
+.ig-cat-grid>*{animation:igTileIn .32s var(--ease-out) both;animation-delay:calc(min(var(--i,0),10) * 26ms)}
+@keyframes igTileIn{from{opacity:0;transform:translateY(8px) scale(.98);filter:blur(3px)}to{opacity:1;transform:none;filter:blur(0)}}
+.ig-cat-tile{padding:8px;gap:10px}
+/* One height for every preview: the tile's spare room goes above its buttons. */
+.ig-cat-tile .dcard-screen{flex:none;height:128px;padding:10px;border-radius:6px;display:flex;align-items:flex-start;overflow:hidden;
+  -webkit-mask-image:linear-gradient(#000 78%,transparent);mask-image:linear-gradient(#000 78%,transparent)}
+.ig-cat-id{display:flex;gap:10px;align-items:center;padding:0 4px}
+.ig-cat-id .dcard-icon{width:28px;height:28px;border-radius:8px}
+/* A long name takes a second line instead of losing its end. */
+.ig-cat-id .dcard-name{white-space:normal;line-height:1.3;text-wrap:balance}
+.ig-cat-id .dcard-icon svg{width:14px;height:14px}
+.ig-cat-desc{margin-top:2px;font-size:12px;line-height:1.45;color:var(--fg-3);text-wrap:pretty}
+.ig-cat-tile .ig-cat-desc{margin:0;padding:0 4px}
+.ig-cat-kind{font-size:11px;color:var(--fg-4)}
+.ig-cat mark{background:color-mix(in oklch,var(--accent) 24%,transparent);color:var(--fg);border-radius:3px;padding:0 1px}
+/* Needs on the left, Add on the right, along every tile's bottom edge. */
+.ig-cat-foot{margin-top:auto;display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px;padding:2px 4px 4px}
+/* A full line of its own, so every Add sits in the same place on its card. */
+.ig-cat-foot .ig-cat-needs{margin-top:0;min-width:0;flex:1 0 100%}
+.ig-cat-foot>.ic-btn{flex:none;margin-left:auto}
+.ig-cat-lead{grid-column:1/-1;font-size:12.5px;color:var(--fg-3)}
+.ig-cat-group{grid-column:1/-1;display:flex;align-items:baseline;gap:6px;margin-top:6px;font-size:10.5px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--fg-4)}
+.ig-cat-group small{font:500 10.5px/1 var(--mono);letter-spacing:0}
+.ig-cat-none{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;gap:8px;padding:48px 16px;text-align:center;
+  font-size:12.5px;color:var(--fg-3)}
+.ig-cat-none b{font-size:14px;color:var(--fg)}
+.ig-cat-none .ic-btn svg{width:13px;height:13px}
+/* "Needs" stays beside its pills, and a pill that wraps lines up under
+   the first one rather than under the word. */
+.ig-cat-needs{margin-top:6px;display:flex;align-items:baseline;gap:6px}
+.ig-cat-needs-list{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+.ig-need{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;white-space:nowrap;
+  border:1px solid var(--line);color:var(--fg-3)}
+.ig-need.ok{color:var(--live);border-color:color-mix(in oklch,var(--live) 35%,transparent)}
+.ig-need.miss{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 40%,transparent)}
+.ig-need svg{width:10px;height:10px;flex:none}
+/* A confirm label ("Click again: …") is longer than the button it
+   replaces: it wraps inside its row instead of pushing out of it. */
+.ig-modal .ic-btn.ig-armed{max-width:100%;white-space:normal;text-align:center;height:auto;min-height:30px}
+/* Builder: the trigger's own switch and remove, under its name. */
+.ig-trig-manage{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;
+  padding:8px 10px;margin-bottom:4px;border:1px solid var(--line);border-radius:10px;background:var(--bg-1)}
+.ig-trig-manage .dest-form-enable{font-size:12.5px}
+.ig-trig-del{color:var(--fg-3)}
+.ig-trig-del svg{width:12px;height:12px}
+.ig-trig-del:hover,.ig-trig-del.ig-armed{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,transparent)}
+.ig-insp-hint{margin:-4px 0 4px;font-size:12px;line-height:1.5;text-wrap:pretty}
+.ig-insp-group{display:flex;flex-direction:column;gap:8px;margin-top:6px;padding-top:14px;border-top:1px solid var(--line)}
+.ig-insp-group>.muted{margin-top:-6px;font-size:12px}
+/* Opaque and above the spine, like a step, so the line doesn't run through. */
+.ig-empty-steps{position:relative;z-index:1;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:10px;
+  background:color-mix(in oklch,var(--accent) 6%,var(--bg-2));border:1px solid color-mix(in oklch,var(--accent) 18%,var(--line));
+  font-size:12.5px;line-height:1.5;color:var(--fg-2);text-wrap:pretty}
+.ig-empty-steps svg{width:16px;height:16px;flex:none;margin-top:2px;color:var(--accent)}
+.ig-empty-steps b{color:var(--fg)}
+/* The amber "Experimental" pill, the same wherever it sits: in a
+   heading, an uppercase section label or a card title. */
+.tag{display:inline-block;margin-left:6px;text-transform:none;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;
+  letter-spacing:.02em;vertical-align:2px;color:var(--warn);
+  background:color-mix(in oklch,var(--warn) 12%,transparent);border:1px solid color-mix(in oklch,var(--warn) 35%,transparent)}
+/* Add: the tile's colour, tinted, so a grid of them reads as cards and
+   not as a wall of solid buttons. It fills on hover. */
+.ig-cat-tile .ig-cat-add{color:var(--dc);background:color-mix(in oklch,var(--dc) 12%,transparent);
+  border-color:color-mix(in oklch,var(--dc) 32%,transparent)}
+.ig-cat-tile .ig-cat-add:hover{color:var(--bg);background:var(--dc);border-color:transparent}
+.ig-cat-pack{padding:14px;gap:10px}
+.ig-cat-pack .ig-cat-foot{padding:0}
+.ic-btn.ig-added{color:var(--live);border-color:color-mix(in oklch,var(--live) 40%,transparent);
+  background:color-mix(in oklch,var(--live) 10%,transparent)}
+.ig-added svg{width:13px;height:13px;animation:igPop .3s cubic-bezier(.2,0,0,1)}
+@media (max-width:720px){
+  .ig-cat{flex-direction:column}
+  .ig-cat-nav{width:auto;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}
+  .ig-cat-nav button{flex:none}
+  .ig-cat-find{margin:12px 14px 0}
+  .ig-cat-find kbd{display:none}
+  .ig-cat-acts{flex-wrap:wrap;justify-content:flex-end}
+}
+/* Builder. */
+.ig-bld{flex:1;min-height:0;display:flex}
+/* While a dialog is open the page under it stays put, and each pane
+   keeps its own scrolling. */
+.ig-palette,.ig-canvas,.ig-inspector{overscroll-behavior:contain}
+.ig-palette{width:236px;flex:none;padding:10px 12px 14px;display:flex;flex-direction:column;gap:1px;border-right:1px solid var(--line);overflow-y:auto}
+.ig-palette .ic-label{margin:12px 6px 4px}
+.ig-palette .ic-label:first-child{margin-top:4px}
+.ig-palette button{display:flex;align-items:center;gap:10px;padding:5px 8px 5px 5px;border-radius:9px;border:1px solid transparent;
+  background:transparent;color:var(--fg-2);font:inherit;font-size:13px;text-align:left;cursor:pointer;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-palette button:hover{background:var(--surface-3);color:var(--fg)}
+.ig-palette button:active{transform:scale(.97)}
+/* Dragging a block or a step. */
+.ig-palette button:not(.ig-pal-locked),.ig-step-main{cursor:grab}
+html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select:none}
+.ig-ghost{position:fixed;left:0;top:0;z-index:3000;margin:0;pointer-events:none;will-change:transform}
+.ig-ghost-in{display:flex;align-items:center;gap:9px;max-width:280px;padding:5px 12px 5px 5px;border-radius:12px;
+  background:color-mix(in oklch,var(--bg-2) 94%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  box-shadow:0 18px 36px -14px rgba(0,0,0,.8),0 0 0 1px color-mix(in oklch,var(--c) 45%,transparent);
+  transform:rotate(-2.5deg);transform-origin:18px 50%;animation:igGhostIn .24s cubic-bezier(.2,.9,.3,1.25) both;
+  transition:opacity .12s var(--ease-out),box-shadow .12s var(--ease-out)}
+@keyframes igGhostIn{from{opacity:0;transform:rotate(0) scale(.82)}}
+.ig-ghost.no .ig-ghost-in{opacity:.55;box-shadow:0 18px 36px -14px rgba(0,0,0,.8),0 0 0 1px color-mix(in oklch,var(--warn) 60%,transparent)}
+.ig-ghost-t{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.ig-ghost-t small{font-size:10.5px;font-weight:600;color:color-mix(in oklch,var(--c) 60%,var(--fg-3))}
+.ig-ghost-t b{font-size:12.5px;font-weight:500;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-ghost-n{flex:none;padding:1px 7px;border-radius:999px;background:var(--surface-3);color:var(--fg-2);font-size:11px;font-weight:600}
+/* The socket a dragged block would drop into, and the step in hand. */
+.ig-in-hand{display:none !important}
+.ig-slot{flex:none;height:var(--h,56px);border-radius:14px;border:1.5px dashed color-mix(in oklch,var(--accent) 65%,transparent);
+  background:color-mix(in oklch,var(--accent) 6%,transparent);box-shadow:inset 0 0 22px -8px color-mix(in oklch,var(--accent) 50%,transparent);
+  animation:igSlotOpen .22s cubic-bezier(.2,.9,.3,1.1) both}
+.ig-slot.still{animation:none}
+@keyframes igSlotOpen{from{height:0;opacity:0;margin-top:-10px}}
+/* Discard's badge while the blocks go back. */
+.ig-rewind-badge{position:fixed;z-index:1600;display:flex;align-items:center;gap:8px;padding:7px 14px 7px 10px;border-radius:999px;pointer-events:none;
+  background:color-mix(in oklch,var(--bg-2) 88%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  box-shadow:0 16px 40px -14px rgba(0,0,0,.8),0 0 0 1px color-mix(in oklch,var(--accent) 40%,transparent);
+  color:var(--fg);font-size:12.5px;font-weight:600;transform:translateX(-50%);animation:igBadgeIn .3s cubic-bezier(.2,.9,.3,1.2) both}
+.ig-rewind-badge svg{width:15px;height:15px;color:var(--accent);animation:igRewindSpin .9s cubic-bezier(.4,0,.2,1)}
+.ig-rewind-badge.fwd svg{animation-direction:reverse}
+@keyframes igBadgeIn{from{opacity:0;transform:translate(-50%,-8px) scale(.9)}}
+@keyframes igRewindSpin{to{transform:rotate(-360deg)}}
+@media (prefers-reduced-motion: reduce){.ig-ghost-in{animation:none;transform:none;transition:none}.ig-slot,.ig-rewind-badge,.ig-rewind-badge svg{animation:none}}
+.ig-pal-ic,.ig-step-ic,.ig-insp-ic{flex:none;display:grid;place-items:center;color:var(--c);
+  background:color-mix(in oklch,var(--c) 15%,transparent);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--c) 22%,transparent)}
+.ig-pal-ic{width:26px;height:26px;border-radius:8px}
+.ig-pal-ic svg{width:14px;height:14px}
+/* The canvas: a quiet dot grid, the steps in a column that stays readable
+   on a wide screen. */
+.ig-canvas{flex:1;min-width:0;padding:20px 28px 28px;overflow-y:auto;container-type:inline-size;
+  background:radial-gradient(color-mix(in oklch,var(--fg) 7%,transparent) 1px,transparent 1.2px) 0 0/20px 20px,var(--bg)}
+.ig-canvas>*{max-width:860px;margin-inline:auto}
+.ig-triggers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.ig-trig{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);
+  background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-trig:hover{color:var(--fg);border-color:var(--line-2)}
+.ig-trig:active{transform:scale(.96)}
+.ig-trig.on{background:var(--surface-3);color:var(--fg);border-color:color-mix(in oklch,var(--accent) 45%,var(--line-2))}
+.ig-trig.add{border-style:dashed}
+.ig-trig svg{width:12px;height:12px}
+.ig-steps,.ig-branch-list{display:flex;flex-direction:column;gap:10px}
+.ig-steps{position:relative}
+/* The spine that ties the steps together, through their icons. */
+.ig-steps::before{content:'';position:absolute;left:28px;top:28px;bottom:28px;width:2px;border-radius:2px;background:var(--line)}
+.ig-step{position:relative;z-index:1;display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:14px;
+  border:1px solid var(--line);background:var(--bg-2);color:inherit;font:inherit;text-align:left;cursor:pointer;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),box-shadow .2s var(--ease-out)}
+.ig-step:hover{border-color:var(--line-2)}
+.ig-step:focus-visible,.ig-step:has(.ig-step-main:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.ig-step-main{flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:0;border:0;background:none;color:inherit;
+  font:inherit;text-align:left;cursor:pointer;outline:none}
+.ig-step.on{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
+  background:color-mix(in oklch,var(--accent) 7%,var(--bg-2));box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 16%,transparent)}
+.ig-step.ig-when{--c:#5ac8fa}
+.ig-step.ig-when:not(.on){border-color:color-mix(in oklch,var(--accent) 35%,var(--line))}
+.ig-step-ic{width:34px;height:34px;border-radius:10px}
+.ig-step-ic svg{width:16px;height:16px}
+.ig-step-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.ig-step-kind{font-size:11px;font-weight:600;line-height:1.3;color:color-mix(in oklch,var(--c) 55%,var(--fg-3));
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-step-text{min-width:0;font-size:13.5px;line-height:1.45;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-step-text .v{font-family:var(--mono);font-size:12px;color:color-mix(in oklch,var(--accent) 70%,#fff)}
+.ig-step-tools{display:flex;gap:2px;opacity:0;transition:opacity .15s var(--ease-out)}
+.ig-step:hover .ig-step-tools,.ig-step.on .ig-step-tools,.ig-step:focus-within .ig-step-tools{opacity:1}
+.ig-step-tools svg{width:13px;height:13px}
+.ig-step-tools .ic-btn-tiny:disabled{opacity:.3;cursor:default}
+/* A narrow canvas (inspector open on a small window, a phone): the tools
+   would squeeze the step's text to nothing, so only the picked step shows
+   them, on a row of their own. */
+@container (max-width:380px){
+  .ig-step{flex-wrap:wrap;row-gap:6px}
+  .ig-step-tools{display:none}
+  .ig-step.on .ig-step-tools{display:flex;flex-basis:100%;justify-content:flex-end}
+}
+/* An If's two branches: lanes side by side when there is room for both,
+   one over the other when not (an If inside an If, a narrow window). */
+.ig-branch{position:relative;z-index:1;margin-left:28px;container-type:inline-size}
+.ig-lanes{display:grid;gap:12px}
+@container (min-width:640px){.ig-lanes{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}}
+.ig-lane{display:flex;flex-direction:column;gap:8px;min-width:0;padding:8px 0 2px 14px;border-left:2px solid var(--lane);container-type:inline-size}
+/* A step in a lane: what it still misses goes on its own line. */
+@container (max-width:520px){
+  .ig-lane .ig-step{flex-wrap:wrap;row-gap:4px}
+  .ig-lane .ig-step-warn{order:3;flex:0 0 100%;max-width:none;padding-left:46px;white-space:normal}
+}
+.ig-lane.yes{--lane:color-mix(in oklch,var(--live) 50%,transparent)}
+.ig-lane.no{--lane:color-mix(in oklch,var(--warn) 50%,transparent)}
+.ig-branch-label{display:inline-flex;align-items:center;gap:5px;align-self:flex-start;padding:2px 9px 2px 7px;border-radius:999px;
+  font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--live);background:color-mix(in oklch,var(--live) 13%,transparent)}
+.ig-branch-label.else{color:var(--warn);background:color-mix(in oklch,var(--warn) 13%,transparent)}
+.ig-branch-label svg{width:11px;height:11px}
+/* An If's checks in the inspector. */
+.ig-conds{display:flex;flex-direction:column}
+.ig-cond{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--bg-2)}
+.ig-cond-top{display:flex;align-items:center;gap:6px}
+.ig-cond-top .ic-input{flex:1;min-width:0}
+.ig-cond-top .ic-btn-tiny svg{width:13px;height:13px}
+.ig-cond-cmp{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.ig-cond-cmp.alone{grid-template-columns:minmax(0,1fr)}
+.ig-cond-quick{display:flex;gap:6px}
+.ig-cond-join{align-self:center;margin:6px 0;padding:1px 10px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--fg-3);background:var(--surface-3)}
+.ig-reward{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+.ig-reward-t{display:flex;flex-direction:column;flex:1 1 0;min-width:0}
+.ig-fires-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ig-fires{padding:2px 9px;border-radius:999px;border:1px solid var(--line);font-size:12px;opacity:.6}
+.ig-fires.yes{border-color:var(--live);color:var(--live);opacity:1}
+.ig-val-body{gap:0}
+.ig-val-tabs{margin-bottom:14px}
+.ig-val-find{margin-bottom:6px}
+.ig-val-group{margin-top:6px}
+.ig-val-head{display:flex;align-items:center;gap:8px;width:100%;padding:9px 10px;border:0;border-radius:10px;background:var(--bg-2);color:var(--fg);font:inherit;font-size:13px;font-weight:600;text-align:left;cursor:pointer}
+.ig-val-head:hover,.ig-val-head:focus-visible{background:var(--surface-3);outline:0}
+.ig-val-head svg{width:14px;height:14px;flex:none;color:var(--fg-4);transform:rotate(-90deg);transition:transform .25s var(--ease-out)}
+.ig-val-group.open .ig-val-head svg{transform:none}
+.ig-val-head-t{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-val-head-n{flex:none;font-size:12px;font-weight:400;color:var(--fg-3)}
+.ig-val-group.open{margin-bottom:14px}
+.ig-val-group.open .ig-val{padding:0 10px}
+@media (prefers-reduced-motion: reduce){.ig-val-head svg{transition:none}}
+.ig-val{border-bottom:1px solid var(--line)}
+.ig-val-main{display:flex;align-items:center;gap:12px;padding:10px 0;min-height:56px}
+.ig-val.wide .ig-val-main{flex-wrap:wrap;align-items:flex-start}
+.ig-val-what{display:flex;flex-direction:column;gap:2px;flex:1 1 0;min-width:0}
+.ig-val-what b{overflow-wrap:anywhere}
+.ig-val-meta{font-size:12px;opacity:.6}
+.ig-val-meta code{font-size:11.5px}
+.ig-val-edit{flex:0 1 46%;min-width:0;display:flex;flex-direction:column;gap:4px}
+.ig-val.wide .ig-val-what{flex:1 1 60%}
+.ig-val.wide .ig-val-edit{order:3;flex:1 1 100%}
+.ig-val-edit textarea.ic-input{resize:vertical;min-height:72px;line-height:1.45}
+.ig-val-num{max-width:140px;margin-left:auto;text-align:right}
+.ig-val-chance{display:flex;align-items:center;gap:10px}
+.ig-val-chance input[type=range]{flex:1 1 0;min-width:0;accent-color:var(--accent)}
+.ig-val-unit{display:flex;align-items:center;gap:6px;flex:0 0 96px}
+.ig-val-unit .ic-input{text-align:right;min-width:0}
+.ig-val-more{display:flex;flex-direction:column;gap:10px;padding:4px 0 14px;align-items:flex-start}
+.ig-val-more .dff{width:100%;margin:0}
+.ig-val-name{display:flex;align-items:center;gap:2px;opacity:.85}
+.ig-val-name .ic-input{flex:1 1 0;min-width:0}
+.ig-val-empty{padding:4px 0}
+.ig-value-list{margin:8px 0 0;padding-left:20px;max-height:220px;overflow:auto}
+.ig-value-list li{padding:2px 0;overflow-wrap:anywhere}
+.ig-reward-picks{display:flex;flex-direction:column;gap:4px;margin:8px 0}
+.ig-reward-pick{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:10px;border:1px solid var(--line);background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.ig-reward-pick:hover{border-color:var(--accent)}
+.ig-reward-pick.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.ig-reward-pick-box{display:grid;place-items:center;flex:0 0 18px;height:18px;border-radius:5px;border:1px solid var(--line)}
+.ig-reward-pick.on .ig-reward-pick-box{background:var(--accent);border-color:var(--accent);color:#06121a}
+.ig-reward-pick-box svg{width:13px;height:13px}
+.ig-reward-pick-t{flex:1 1 0;min-width:0;overflow-wrap:anywhere}
+.ig-switch{flex:0 0 34px;height:20px;border-radius:999px;border:0;padding:2px;background:var(--line);cursor:pointer}
+.ig-switch span{display:block;width:16px;height:16px;border-radius:50%;background:var(--fg);opacity:.7}
+.ig-switch.on{background:var(--accent)}
+.ig-switch.on span{margin-left:14px;background:#06121a;opacity:1}
+.ig-reward.off .ig-reward-t{opacity:.55}
+.ig-reward-wait{padding:14px 0}
+.ig-reward-form{display:flex;flex-direction:column;gap:8px;padding:12px;margin:6px 0;border:1px solid var(--line);border-radius:12px}
+.ig-reward-form-row{display:flex;gap:8px}
+.ig-reward-form-row > .ic-input{flex:1 1 0;min-width:0}
+.ig-reward-cost{display:flex;align-items:center;gap:6px;flex:0 0 120px}
+.ig-reward-cost .ic-input{min-width:0;text-align:right}
+.ig-reward-form-foot{display:flex;justify-content:flex-end;gap:8px}
+.ig-holders-list{margin:6px 0 0;padding-left:22px}
+.ig-holders-list li{padding:2px 0}
+.ig-holders-list b{margin-left:8px;font-variant-numeric:tabular-nums}
+.ig-holders-row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.ig-holders-row .ic-input{flex:1 1 90px;min-width:0}
+.ig-cond-add{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;margin-top:8px;padding:5px 10px 5px 8px;border-radius:8px;
+  border:1px dashed var(--line-2);background:none;color:var(--fg-3);font:inherit;font-size:12.5px;cursor:pointer;
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ig-cond-add:hover{color:var(--fg);border-color:var(--fg-4)}
+.ig-cond-add svg{width:12px;height:12px}
+.ig-drop{position:relative;z-index:1;min-height:34px;border-radius:10px;border:1px dashed var(--line-2);background:var(--bg);
+  color:var(--fg-4);font:inherit;font-size:12px;cursor:pointer;
+  transition:border-color .2s var(--ease-out),color .2s var(--ease-out),background-color .2s var(--ease-out)}
+.ig-drop:hover{color:var(--fg-2);border-color:var(--fg-4)}
+.ig-drop.on{border-color:var(--accent);color:var(--accent);background:color-mix(in oklch,var(--accent) 6%,var(--bg))}
+.ig-run-box{margin-top:16px;display:flex;flex-direction:column;gap:8px;animation:igFadeUp .26s var(--ease-out)}
+.ig-inspector{width:clamp(340px,27vw,440px);flex:none;padding:18px 22px;border-left:1px solid var(--line);overflow-y:auto}
+/* A converted bot command. */
+.ig-converted{display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border-radius:9px;font-size:12.5px;line-height:1.5;color:var(--fg-2);
+  background:color-mix(in oklch,var(--live) 9%,transparent);border:1px solid color-mix(in oklch,var(--live) 32%,transparent);
+  animation:igFadeUp .26s var(--ease-out)}
+.ig-converted svg{width:13px;height:13px;flex:none;margin-top:3px;color:var(--live);animation:igPop .3s cubic-bezier(.2,0,0,1)}
+.ig-converted code{font-family:var(--mono);font-size:11.5px;color:var(--warn)}
+@media (prefers-reduced-motion: reduce){.ig-converted,.ig-converted svg{animation:none}}
+/* Motion details. */
+.ig-pane [data-tick],.ig-modal [data-tick]{display:inline-block}
+.ig-secret-field{position:relative}
+.ig-decode{position:absolute;z-index:1;box-sizing:border-box;border-style:solid;border-color:transparent;pointer-events:none;
+  overflow:hidden;display:flex;align-items:center;white-space:pre;color:var(--fg)}
+.ig-decode.area{display:block;white-space:pre-wrap;overflow-wrap:anywhere}
+.ig-decode span{transition:color .2s var(--ease-out)}
+.ig-decode .s0{color:var(--fg-3)}
+.ig-decode .s1{color:var(--accent)}
+.ig-secret.ig-decoding{color:transparent;-webkit-text-fill-color:transparent}
+.ig-eye{position:relative;display:inline-grid;width:12px;height:12px}
+.ig-eye svg{grid-area:1/1;width:12px;height:12px;transition:opacity .2s cubic-bezier(.2,0,0,1),transform .2s cubic-bezier(.2,0,0,1),filter .2s cubic-bezier(.2,0,0,1)}
+.ig-secret-field:not(.shown) .ig-eye svg:last-child,.ig-secret-field.shown .ig-eye svg:first-child{opacity:0;transform:scale(.25);filter:blur(4px)}
+.ic-toast.ig-undo{position:relative;overflow:hidden}
+.ig-undo-bar{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--accent);opacity:.6;transform-origin:left;
+  animation:igDrain linear forwards}
+.ig-undo:hover .ig-undo-bar{animation-play-state:paused}
+@keyframes igDrain{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+.ic-btn.ig-saved{gap:6px}
+.ic-btn.ig-saved svg{width:14px;height:14px;animation:igPop .3s cubic-bezier(.2,0,0,1)}
+.ig-menu [role="menuitem"]{animation:igFadeUp .2s var(--ease-out) both;animation-delay:calc(var(--i,0) * 22ms)}
+.ig-run>div{animation:igFadeUp .24s var(--ease-out) both;animation-delay:calc(min(var(--i,0),12) * 40ms)}
+.ig-jtree>*{animation:igFadeUp .24s var(--ease-out) both;animation-delay:calc(min(var(--i,0),16) * 16ms)}
+@media (prefers-reduced-motion: reduce){
+  .ig-menu [role="menuitem"],.ig-run>div,.ig-jtree>*,.ic-btn.ig-saved svg{animation:none}
+  .ig-undo-bar{animation:none;display:none}
+  .ig-eye svg{transition:none}
+}
+/* The card over a variable chip. */
+.ig-vtip{position:fixed;z-index:2100;width:max-content;max-width:260px;padding:10px 12px;border-radius:10px;
+  background:var(--bg-2);border:1px solid var(--line-2);box-shadow:0 14px 34px -12px rgba(0,0,0,.75);
+  display:flex;flex-direction:column;gap:6px;pointer-events:none;opacity:0;transform:translateY(4px);
+  transition:opacity .14s var(--ease-out),transform .14s var(--ease-out)}
+.ig-vtip.below{transform:translateY(-4px)}
+.ig-vtip.on{opacity:1;transform:none}
+.ig-vtip code{font:600 12px/1.4 var(--mono);color:color-mix(in oklch,var(--accent) 70%,#fff)}
+.ig-vtip p{margin:0;font-size:12.5px;line-height:1.45;color:var(--fg-2);text-wrap:pretty}
+.ig-vtip-eg{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:12px}
+.ig-vtip-eg span{color:var(--fg-4);flex:none}
+.ig-vtip-eg b{min-width:0;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--fg);font:500 11.5px/1.5 var(--mono);
+  overflow-wrap:anywhere}
+.ig-vtip small{font-size:11px;color:var(--fg-4)}
+@media (prefers-reduced-motion: reduce){.ig-vtip,.ig-vtip.below{transform:none;transition:opacity .1s linear}}
+/* "How does it start?": the first decision of a new integration. */
+.ig-bld.picking .ig-palette{opacity:.4;pointer-events:none;transition:opacity .2s var(--ease-out)}
+.ig-chooser{display:flex;flex-direction:column;gap:16px;padding:6px 2px 10px}
+.ig-chooser-head h3{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--fg);text-wrap:balance}
+.ig-chooser-head p{margin:4px 0 0;font-size:13px;color:var(--fg-3)}
+.ig-chooser-back{display:inline-flex;align-items:center;gap:6px;margin:0 0 10px -6px;padding:5px 10px 5px 6px;border:0;border-radius:8px;
+  background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;cursor:pointer;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out)}
+.ig-chooser-back:hover{background:var(--surface-3);color:var(--fg)}
+.ig-chooser-back svg{width:14px;height:14px}
+.ig-kinds{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.ig-kind{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-radius:14px;border:1px solid var(--line);
+  background:var(--bg-2);color:var(--fg-2);font:inherit;text-align:left;cursor:pointer;
+  animation:igTileIn .3s var(--ease-out) both;animation-delay:calc(var(--i,0) * 35ms);
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),transform .2s var(--ease-out)}
+.ig-kind:hover{border-color:color-mix(in oklch,var(--accent) 45%,var(--line-2));transform:translateY(-2px);
+  box-shadow:0 18px 40px -24px color-mix(in oklch,var(--accent) 80%,transparent)}
+.ig-kind:active{transform:scale(.96)}
+.ig-kind:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-kind-ic{width:36px;height:36px;margin-bottom:6px;border-radius:10px;display:grid;place-items:center;
+  background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));color:var(--accent)}
+.ig-kind-ic svg{width:18px;height:18px}
+.ig-kind b{font-size:14px;font-weight:600;color:var(--fg)}
+.ig-kind small{font-size:12px;line-height:1.45;color:var(--fg-3);text-wrap:pretty}
+.ig-kind-eg{margin-top:6px;padding:4px 8px;border-radius:7px;background:var(--bg-1);font-size:11.5px;color:var(--fg-3);text-wrap:pretty}
+.ig-evgroup{display:flex;flex-direction:column;gap:8px}
+.ig-evs{display:flex;flex-direction:column;gap:6px}
+.ig-evs.big{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.ig-ev,.ig-evcurrent{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);
+  background:var(--bg-2);color:var(--fg-2);font:inherit;text-align:left;cursor:pointer;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-evs.big .ig-ev{animation:igTileIn .3s var(--ease-out) both;animation-delay:calc(min(var(--i,0),12) * 22ms)}
+.ig-ev:hover,.ig-evcurrent:hover{border-color:color-mix(in oklch,var(--accent) 45%,var(--line-2))}
+.ig-ev:active,.ig-evcurrent:active{transform:scale(.98)}
+.ig-ev:focus-visible,.ig-evcurrent:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-ev.on{border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:color-mix(in oklch,var(--accent) 10%,var(--bg-2))}
+.ig-ev-ic{width:30px;height:30px;flex:none;border-radius:9px;display:grid;place-items:center;
+  background:color-mix(in oklch,var(--accent) 12%,var(--surface-3));color:var(--accent)}
+.ig-ev-ic svg{width:15px;height:15px}
+.ig-ev-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ig-ev-t b{font-size:13px;font-weight:600;color:var(--fg)}
+.ig-ev-t small{font-size:11.5px;line-height:1.4;color:var(--fg-3);text-wrap:pretty}
+.ig-ev-on{color:var(--accent);flex:none}
+.ig-ev-on svg{width:14px;height:14px;animation:igPop .25s cubic-bezier(.2,0,0,1)}
+.ig-evchange{flex:none;font-size:12px;font-weight:600;color:var(--accent)}
+@media (prefers-reduced-motion: reduce){.ig-kind,.ig-evs.big .ig-ev,.ig-ev-on svg{animation:none}}
+.ig-insp{display:flex;flex-direction:column;gap:12px;min-height:100%}
+.ig-insp-title{display:flex;align-items:center;gap:12px}
+.ig-insp-ic{width:38px;height:38px;border-radius:11px}
+.ig-insp-ic svg{width:18px;height:18px}
+.ig-insp-title small{display:block;font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--c)}
+.ig-insp-title b{display:block;margin-top:3px;font-size:15px;font-weight:600}
+.ig-insp-vars{margin-top:auto;padding-top:12px;display:flex;flex-direction:column;gap:8px}
+.ig-insp-p{margin:0;font-size:13px;line-height:1.6;color:var(--fg-2);text-wrap:pretty}
+.ig-inspector .dff>label{font-size:12px;font-weight:600;color:var(--fg-2)}
+.ig-inspector textarea.ic-input{resize:vertical;min-height:70px;font-family:var(--mono);font-size:12.5px}
+.ig-copy-row{display:flex;gap:6px}
+.ig-copy-row .ic-input{flex:1;min-width:0;font-size:11.5px}
+.ig-run{display:flex;flex-direction:column;gap:2px;font-size:12.5px}
+.ig-run div{display:grid;grid-template-columns:62px 190px minmax(0,1fr);gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
+.ig-run .t{color:var(--fg-4);font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums}
+.ig-run .ok{color:var(--live)}.ig-run .failed{color:var(--danger)}.ig-run .skipped{color:var(--fg-3)}
+.ig-run .d{color:var(--fg-3);overflow-wrap:anywhere}
+/* Connections. */
+.ig-conn-body{padding:18px 22px 22px;gap:14px}
+.ig-conn-body>.ig-seg{align-self:flex-start}
+.ig-accts{display:flex;flex-direction:column;gap:8px}
+.ig-acct{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line)}
+.ig-acct.bare{padding:0;border:0;background:none}
+.ig-acct .dcard-icon{width:32px;height:32px}
+.ig-acct .ic-btn-tiny svg{width:13px;height:13px}
+.ig-ic-discord{--dc:#a5b4fc}
+.ig-ic-twitch{--dc:#a78bfa}
+.ig-blurb{font-family:inherit;white-space:normal;line-height:1.45}
+.ig-account,.ig-form{display:flex;flex-direction:column;gap:12px}
+.ig-form-actions{display:flex;gap:8px;justify-content:flex-end}
+.ig-device{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;animation:igFadeUp .3s var(--ease-out)}
+.ig-device-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.ig-device-actions a{text-decoration:none}
+.ig-code{align-self:stretch;padding:14px;border-radius:12px;background:var(--bg-2);border:1px dashed color-mix(in oklch,var(--accent) 45%,var(--line));
+  font:600 30px/1 var(--mono);letter-spacing:.18em;color:var(--fg);text-align:center;font-variant-numeric:tabular-nums;
+  animation:igPop .35s cubic-bezier(.2,0,0,1)}
+/* Recipes. */
+.ig-textarea-code{width:100%;min-height:90px;resize:vertical;font-family:var(--mono);font-size:12px}
+.ig-recipe{display:flex;flex-direction:column;gap:12px;animation:igFadeUp .3s var(--ease-out)}
+.ig-recipe-list{display:flex;flex-direction:column;gap:10px}
+.ig-recipe-head{display:flex;align-items:center;gap:8px}
+.ig-ok{width:20px;height:20px;flex:none;border-radius:50%;display:grid;place-items:center;
+  background:color-mix(in oklch,var(--live) 18%,transparent);color:var(--live)}
+.ig-ok svg{width:12px;height:12px;animation:igPop .3s cubic-bezier(.2,0,0,1)}
+/* One card per integration in a recipe, its edge colored by the worst it
+   can do. The rows under it open smoothly where the browser can animate
+   to auto height (interpolate-size), and simply open elsewhere. */
+.ig-recipe-list{interpolate-size:allow-keywords}
+.ig-ritem{position:relative;display:flex;flex-direction:column;gap:6px;padding:12px 14px 12px 16px;border-radius:12px;
+  background:var(--surface-2);border:1px solid var(--line);font-size:13px;color:var(--fg-2);overflow:hidden;
+  animation:igFadeUp .32s var(--ease-out) both;animation-delay:calc(min(var(--i,0), 8) * 60ms)}
+.ig-ritem::before{content:'';position:absolute;inset:0 auto 0 0;width:3px;background:var(--line)}
+.ig-ritem.caution::before{background:var(--warn)}
+.ig-ritem.danger::before{background:var(--err)}
+.ig-rname{color:var(--fg);font-size:13.5px}
+.ig-rwhen{font-size:12px}
+.ig-rwho{color:var(--fg-3)}
+.ig-rflags{display:flex;flex-wrap:wrap;gap:6px}
+.ig-rflag{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:3px 9px;border-radius:999px;
+  background:var(--surface-3);color:var(--fg-2);animation:igFadeUp .3s var(--ease-out) both;animation-delay:calc(120ms + var(--i,0) * 50ms)}
+.ig-rflag svg{width:12px;height:12px;flex:none}
+.ig-rflag.caution{background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
+.ig-rflag.danger{background:color-mix(in oklch,var(--err) 16%,transparent);color:var(--err);font-weight:600}
+.ig-palette button.ig-pal-locked{opacity:.45;cursor:not-allowed}
+.ig-rfolds{display:flex;flex-direction:column;margin-top:4px;border-top:1px solid var(--line)}
+.ig-rfold{border-bottom:1px solid var(--line)}
+.ig-rfold:last-child{border-bottom:0}
+.ig-rfold>summary{display:flex;align-items:center;gap:8px;padding:9px 4px;cursor:pointer;list-style:none;font-size:12.5px;
+  color:var(--fg-2);border-radius:8px;transition:color .15s,background .15s}
+.ig-rfold>summary::-webkit-details-marker{display:none}
+.ig-rfold>summary:hover{color:var(--fg);background:color-mix(in oklch,var(--fg) 4%,transparent)}
+.ig-rfold>summary:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.ig-rfold[open]>summary{color:var(--fg)}
+.ig-rfold-ic{width:14px;height:14px;flex:none;color:var(--fg-3)}
+.ig-rfold-label{flex:1;display:flex;align-items:center;gap:6px}
+.ig-rcount{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--surface-3);color:var(--fg-3)}
+.ig-rchev{width:14px;height:14px;flex:none;color:var(--fg-4);transform:rotate(-90deg);transition:transform .25s var(--ease-out)}
+.ig-rfold[open] .ig-rchev{transform:none}
+.ig-rfold::details-content{block-size:0;opacity:0;overflow:clip;
+  transition:block-size .3s var(--ease-out),opacity .25s var(--ease-out),content-visibility .3s allow-discrete}
+.ig-rfold[open]::details-content{block-size:auto;opacity:1}
+.ig-rfold-body{display:flex;flex-direction:column;gap:8px;padding:2px 0 12px}
+.ig-rhandler{padding:10px 12px;border-radius:10px;background:var(--bg-2);border:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.ig-rtrig{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--fg)}
+.ig-rtrig svg{width:13px;height:13px;flex:none;color:var(--accent)}
+.ig-rsteps{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;counter-reset:rstep}
+.ig-rsteps .ig-rsteps{margin:6px 0 0 9px;padding-left:16px;border-left:1px dashed var(--line)}
+.ig-rstep{counter-increment:rstep;font-size:12.5px;color:var(--fg-2);overflow-wrap:anywhere}
+.ig-rfold[open] .ig-rstep{animation:igFadeUp .28s var(--ease-out) both;animation-delay:calc(min(var(--i,0), 12) * 35ms)}
+.ig-rline{display:flex;align-items:baseline;gap:8px}
+.ig-rline::before{content:counter(rstep);flex:none;align-self:flex-start;margin-top:-1px;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;
+  font-size:10px;font-weight:700;color:var(--fg-3);background:var(--surface-3)}
+.ig-rstep.ig-rnone{counter-increment:none;color:var(--fg-3);font-style:italic}
+.ig-rtag{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--c)}
+.ig-rstep.danger>.ig-rline::before{background:color-mix(in oklch,var(--err) 20%,transparent);color:var(--err)}
+.ig-rstep.caution>.ig-rline::before{background:color-mix(in oklch,var(--warn) 20%,transparent);color:var(--warn)}
+.ig-rstep.danger>.ig-rline>.ig-step-text{color:var(--err)}
+.ig-rstep.caution>.ig-rline>.ig-step-text{color:var(--warn)}
+.ig-relse{display:inline-block;margin:6px 0 0 9px;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:600;
+  color:var(--fg-3);background:var(--surface-3)}
+.ig-rstep .ig-step-text{white-space:normal;overflow:visible;text-overflow:clip;min-width:0}
+.ig-rstep .ig-rnote{color:var(--fg-3);font-size:11.5px}
+.ig-rraw-wrap{position:relative}
+.ig-rraw-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:11.5px;color:var(--fg-3)}
+.ig-foot-why{border:0;background:none;padding:0;font:inherit;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.ig-rraw{margin:0;padding:12px 14px;max-height:300px;overflow:auto;border-radius:10px;background:var(--bg-2);border:1px solid var(--line);
+  font:11.5px/1.6 var(--mono);color:var(--fg-3);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:2;scrollbar-width:thin}
+.ig-rraw .jk{color:color-mix(in oklch,var(--accent) 75%,var(--fg))}
+.ig-rraw .js{color:var(--live)}
+.ig-rraw .jd{color:#fcd34d}
+.ig-rraw .jb{color:#a78bfa}
+.ig-rraw .jn{color:var(--fg-4)}
+@media (prefers-reduced-motion: reduce){
+  .ig-ritem,.ig-rflag,.ig-rfold[open] .ig-rstep{animation:none}
+  .ig-rfold::details-content,.ig-rchev{transition:none}
+}
+.ig-recipe-safe{display:flex;align-items:flex-start;gap:8px}
+.ig-recipe-safe svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--accent)}
+.ig-share-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
+/* Back, menu and undo: every step can be taken back. */
+.ig-modal .dest-form-head .ig-back{margin-right:-4px}
+.ig-card .ig-more{opacity:.7;transition:opacity .15s var(--ease-out),background-color .15s var(--ease-out)}
+.ig-card:hover .ig-more,.ig-more[aria-expanded="true"],.ig-more:focus-visible{opacity:1}
+.ig-more svg{width:16px;height:16px}
+.ig-menu{position:fixed;z-index:1100;min-width:200px;padding:5px;border-radius:12px;background:var(--bg-2);
+  border:1px solid var(--line-2);box-shadow:0 18px 40px -14px rgba(0,0,0,.7),0 2px 6px rgba(0,0,0,.3);
+  display:flex;flex-direction:column;gap:1px;transform-origin:top right;animation:igMenuIn .16s var(--ease-out)}
+.ig-menu.closing{opacity:0;transform:scale(.97);transition:opacity .12s var(--ease-out),transform .12s var(--ease-out)}
+@keyframes igMenuIn{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:none}}
+.ig-menu [role="menuitem"]{display:flex;align-items:center;gap:10px;padding:8px 10px;border:0;border-radius:7px;background:transparent;
+  color:var(--fg-2);font:inherit;font-size:13px;text-align:left;text-decoration:none;cursor:pointer;
+  transition:background-color .12s var(--ease-out),color .12s var(--ease-out)}
+.ig-menu [role="menuitem"] svg{width:14px;height:14px;flex:none;color:var(--fg-3)}
+.ig-menu [role="menuitem"]:hover,.ig-menu [role="menuitem"]:focus-visible{background:var(--surface-3);color:var(--fg);outline:none}
+.ig-menu button.danger{color:var(--danger)}
+.ig-menu button.danger svg{color:var(--danger)}
+.ig-menu button.danger:hover,.ig-menu button.danger:focus-visible,.ig-menu button.ig-armed{background:color-mix(in oklch,var(--danger) 14%,transparent)}
+.ig-menu-sep{height:1px;margin:4px 6px;background:var(--line)}
+.ig-menu-label{padding:6px 10px 4px;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-4)}
+.ig-menu [aria-current="true"]{color:var(--accent)}
+.ig-menu [aria-current="true"] svg{color:var(--accent)}
+.ig-menu-new{margin:2px 4px 4px;width:auto;font-size:13px;padding:7px 10px}
+/* Folders on the Integrations tab: a heading over each group. */
+.ig-folder{display:flex;align-items:center;gap:6px;margin:14px 0 8px;min-height:40px}
+.ig-folder:first-child{margin-top:2px}
+.ig-folder-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 10px 0 4px;border:0;border-radius:9px;background:transparent;
+  color:var(--fg);font:inherit;font-size:13.5px;cursor:pointer;transition:background-color .15s var(--ease-out)}
+.ig-folder-head:hover,.ig-folder-head:focus-visible{background:var(--surface-2);outline:none}
+.ig-folder-head .muted{font-size:12px}
+.ig-folder-chev{width:14px;height:14px;color:var(--fg-3);transition:transform .2s var(--ease-out)}
+.ig-folder.folded .ig-folder-chev{transform:rotate(-90deg)}
+.ig-folder-ic{width:15px;height:15px;color:var(--fg-3)}
+.ig-folder .ic-btn-tiny{opacity:0;transition:opacity .15s var(--ease-out)}
+.ig-folder:hover .ic-btn-tiny,.ig-folder .ic-btn-tiny:focus-visible{opacity:1}
+.ig-folder-in{max-width:280px;font-size:13.5px;padding:7px 10px}
+@media (hover:none){.ig-folder .ic-btn-tiny{opacity:1}}
+/* Dragging a card to a folder: where it can go lights up. */
+.ig-items [draggable="true"]{-webkit-user-drag:element}
+.ig-dragged{opacity:.4;transition:opacity .15s var(--ease-out)}
+.ig-drop-new{display:flex;align-items:center;justify-content:center;gap:8px;height:0;margin-bottom:0;overflow:hidden;opacity:0;
+  border:0 dashed var(--line-2);border-radius:12px;color:var(--fg-3);font-size:13px;
+  transition:height .22s var(--ease-out),margin-bottom .22s var(--ease-out),opacity .18s var(--ease-out),border-width .22s var(--ease-out)}
+.ig-drop-new svg{width:16px;height:16px}
+.ig-dragging .ig-drop-new{height:56px;margin-bottom:10px;opacity:1;border-width:1.5px}
+/* It floats at the top of the scrolled list, so a card dragged from far
+   down never has to reach back up for it. */
+.ig-dragging .ig-drop-new{position:sticky;top:-20px;z-index:6;color:var(--fg-2);
+  border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 7%,var(--surface));
+  box-shadow:0 10px 24px -12px rgb(0 0 0 / .7)}
+.ig-folder-empty{display:flex;align-items:center;justify-content:center;min-height:64px;border:1.5px dashed var(--line);border-radius:12px;
+  color:var(--fg-4);font-size:12.5px}
+.ig-dragging [data-drop-folder]{transition:background-color .15s var(--ease-out),box-shadow .15s var(--ease-out)}
+[data-drop-folder].drop-on{border-radius:12px;background:color-mix(in oklch,var(--accent) 8%,transparent);
+  box-shadow:inset 0 0 0 1.5px color-mix(in oklch,var(--accent) 70%,transparent);color:var(--fg)}
+.ig-new-folder{white-space:nowrap}
+@media (max-width:560px){.ig-new-folder span{display:none}.ig-new-folder .ig-btn-ic{margin:0}}
+.ic-toast.ig-undo{pointer-events:auto;align-items:center}
+.ig-undo-btn{margin-left:10px;padding:4px 11px;border-radius:7px;border:1px solid color-mix(in oklch,var(--accent) 45%,transparent);
+  background:color-mix(in oklch,var(--accent) 12%,transparent);color:var(--accent);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:background-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-undo-btn:hover{background:color-mix(in oklch,var(--accent) 20%,transparent)}
+.ig-undo-btn:active{transform:scale(.96)}
+.ig-act-row.link{cursor:pointer;border-radius:6px;transition:background-color .15s var(--ease-out)}
+.ig-act-row.link:hover{background:var(--surface-3)}
+.ig-act-row.link:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* Secrets stay hidden until asked: a dashboard is often on stream. */
+.dest-form .ig-secret-field>label{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ig-reveal{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:6px;border:1px solid var(--line);
+  background:transparent;color:var(--fg-3);font:inherit;font-size:11.5px;font-weight:500;text-transform:none;letter-spacing:0;cursor:pointer;
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ig-reveal:hover{color:var(--fg);border-color:var(--line-2)}
+.ig-reveal svg{width:12px;height:12px}
+.ig-secret-field:not(.shown) .ig-secret{-webkit-text-security:disc}
+/* Try a web request, then pick a value from the answer. */
+.ig-try-wrap{margin-top:16px;animation:igFadeUp .26s var(--ease-out)}
+.ig-try{display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:12px;background:var(--bg-1);border:1px solid var(--line)}
+.ig-try-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ig-try-inputs{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.ig-try-meta{display:flex;align-items:center;gap:8px}
+.ig-status-pill{padding:2px 8px;border-radius:999px;font:600 11.5px/1.5 var(--mono);font-variant-numeric:tabular-nums}
+.ig-status-pill.ok{color:var(--live);background:color-mix(in oklch,var(--live) 14%,transparent)}
+.ig-status-pill.bad{color:var(--danger);background:color-mix(in oklch,var(--danger) 14%,transparent)}
+.ig-try-text{max-height:220px;overflow:auto;padding:10px;border-radius:8px;background:var(--bg-2);
+  font:12px/1.5 var(--mono);color:var(--fg-2);white-space:pre-wrap;word-break:break-word}
+.ig-picked{display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:10px;
+  border:1px solid color-mix(in oklch,var(--accent) 45%,transparent);background:color-mix(in oklch,var(--accent) 8%,transparent);
+  animation:igFadeUp .24s var(--ease-out)}
+.ig-picked-what{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:12.5px}
+.ig-picked-what code{font-family:var(--mono);color:color-mix(in oklch,var(--accent) 70%,#fff);flex:none;max-width:60%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-picked-what span{min-width:0;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-picked-actions{display:flex;gap:6px;flex-wrap:wrap}
+.ig-jtree{max-height:420px;overflow:auto;padding:6px;border-radius:8px;background:var(--bg-2);font:12px/1.5 var(--mono)}
+.ig-jnode>summary{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:6px;cursor:pointer;list-style:none;color:var(--fg-2)}
+.ig-jnode>summary::-webkit-details-marker{display:none}
+.ig-jnode>summary:hover{background:var(--surface-3)}
+.ig-jnode>summary svg{width:11px;height:11px;flex:none;color:var(--fg-4);transform:rotate(-90deg);transition:transform .2s var(--ease-out)}
+.ig-jnode[open]>summary svg{transform:none}
+.ig-jkids{margin-left:11px;padding-left:8px;border-left:1px solid var(--line)}
+.ig-jcount{color:var(--fg-4)}
+.ig-jleaf{display:flex;align-items:baseline;gap:8px;width:100%;padding:3px 6px;border:0;border-radius:6px;background:transparent;
+  color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background-color .12s var(--ease-out)}
+.ig-jleaf:hover,.ig-jleaf:focus-visible{background:color-mix(in oklch,var(--accent) 12%,transparent);outline:none}
+.ig-jleaf .k,.ig-jnode .k{color:var(--fg-3);flex:none}
+.ig-jleaf .k::after{content:':'}
+.ig-jleaf .v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-jleaf .v.string{color:var(--live)}
+.ig-jleaf .v.number{color:#fcd34d}
+.ig-jleaf .v.boolean{color:#a78bfa}
+.ig-jleaf .v.null{color:var(--fg-4)}
+.ig-juse{flex:none;font:600 11px/1.5 var(--sans);color:var(--accent);opacity:0;transition:opacity .12s var(--ease-out)}
+.ig-jleaf:hover .ig-juse,.ig-jleaf:focus-visible .ig-juse{opacity:1}
+.ig-jleaf.off{cursor:default;opacity:.55}
+.ig-jleaf.off:hover{background:transparent}
+.ig-jmore{padding:3px 6px;color:var(--fg-4)}
+/* Discord's self-updating times (<t:…:R>), as Discord draws them. */
+.ig-ts{padding:0 4px;border-radius:4px;background:rgba(255,255,255,.07);color:#f2f3f5;font-variant-numeric:tabular-nums}
+.ig-live-upd{display:inline-flex;align-items:center;gap:4px;margin-left:4px;font-size:11.5px;color:#949ba4}
+.ig-live-upd svg{width:11px;height:11px}
+/* "Show on stream": a scene with the alert card on it. */
+.ig-pv-overlay{align-self:stretch;display:flex;align-items:flex-end;justify-content:center;padding:8px;border-radius:8px;
+  background:radial-gradient(120% 90% at 20% 10%,#2b3a4d 0,transparent 60%),linear-gradient(135deg,#17202b,#231a2d)}
+.ig-pv-alert{position:relative;max-width:92%;min-width:0;padding:5px 10px 7px 12px;border-radius:8px;overflow:hidden;
+  background:rgba(15,18,24,.92);box-shadow:0 0 0 1px rgba(255,255,255,.09),0 6px 14px -6px rgba(0,0,0,.6)}
+.ig-pv-alert::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#5ac8fa}
+.ig-pv-alert small{display:block;font-size:8.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#5ac8fa}
+.ig-pv-alert b{display:block;color:#f4f6f8;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-pv-alert i{position:absolute;left:3px;right:30%;bottom:0;height:2px;background:#5ac8fa;opacity:.55}
+.ig-pv.big.ig-pv-overlay{min-height:120px;padding:16px}
+.ig-pv.big .ig-pv-alert{padding:9px 16px 11px 18px;border-radius:12px}
+.ig-pv.big .ig-pv-alert small{font-size:10px}
+.ig-pv.big .ig-pv-alert b{font-size:16px;white-space:normal}
+/* The last runs, oldest first. */
+.ig-hist{position:absolute;right:7px;bottom:7px;display:flex;gap:3px;padding:4px 6px;border-radius:999px;
+  background:color-mix(in oklch,var(--bg-1) 72%,transparent);backdrop-filter:blur(6px);pointer-events:auto}
+.ig-hist i{width:5px;height:5px;border-radius:50%;background:var(--live)}
+.ig-hist i.failed{background:var(--danger)}
+.ig-hist i.stopped{background:var(--fg-4)}
+.ig-hist i.busy{background:var(--warn)}
+.ig-row .ig-hist{position:static;flex:none;padding:0;background:none;backdrop-filter:none}
+/* Hotkey and MIDI pad pickers: the Controls tab's capture fields. */
+.ig-keys{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.ig-key-row{display:flex;align-items:center;gap:6px}
+.ig-key{flex:1;min-width:0;justify-content:flex-start}
+.ig-key .hk-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:inherit}
+/* Ready-made website commands. */
+.ig-starts{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.ig-starts .ic-label{margin-right:4px}
+.ig-start{padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);color:var(--fg);
+  font:600 12px/1.3 var(--mono);cursor:pointer;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .12s var(--ease-out)}
+.ig-start:hover{border-color:color-mix(in oklch,var(--accent) 55%,var(--line))}
+.ig-start:active{transform:scale(.96)}
+.ig-start:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-start.on{border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:color-mix(in oklch,var(--accent) 14%,var(--surface-3))}
+.ig-setup{display:flex;flex-direction:column;gap:10px}
+.ig-quiet{display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:320px}
+.ig-insp-quiet{display:flex;flex-direction:column;gap:8px}
+.ig-inline-ic{width:13px;height:13px;margin-right:5px;vertical-align:-2px;color:var(--fg-3)}
+.ig-kind:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}
+/* Discord cards (embeds), drawn the way Discord's dark theme draws them. */
+.ig-embed{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:4px;max-width:520px;padding:7px 10px 9px 10px;border-radius:4px;
+  border-left:4px solid var(--ec,#5ac8fa);background:#2b2d31;color:#dbdee1;min-width:0}
+.ig-embed-title{color:#f2f3f5;font-weight:600;font-size:12px;line-height:1.3;overflow-wrap:anywhere}
+.ig-embed-title.link{color:#00a8fc}
+.ig-embed-desc{font-size:11.5px;line-height:1.4;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.ig-embed code{padding:0 .25em;border-radius:3px;background:#1e1f22;font:85% var(--mono)}
+.ig-embed pre{margin:4px 0;padding:6px 8px;border-radius:4px;background:#1e1f22;border:1px solid #1a1b1e;
+  font:11px/1.45 var(--mono);color:#dbdee1;white-space:pre-wrap}
+.ig-dlink{color:#00a8fc}
+.ig-txt .ig-dlink,.ig-embed-desc .ig-dlink,.ig-embed-fields .ig-dlink{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;vertical-align:bottom}
+.ig-embed-fields{display:none}
+.ig-embed-foot{display:none}
+.ig-embed.big{gap:8px;padding:8px 16px 16px 12px}
+.ig-embed.big .ig-embed-title{font-size:16px;line-height:22px}
+.ig-embed.big .ig-embed-desc{font-size:14px;line-height:1.375;-webkit-line-clamp:unset;display:block}
+.ig-embed.big .ig-embed-fields{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:8px 16px}
+.ig-embed-fields>div{grid-column:1/-1;display:flex;flex-direction:column;gap:2px;min-width:0;font-size:14px}
+.ig-embed-fields>div.in{grid-column:span var(--span,4)}
+.ig-embed-fields b{color:#f2f3f5;font-size:14px;font-weight:600}
+.ig-embed-fields span{overflow-wrap:anywhere}
+.ig-embed.big .ig-embed-foot{display:flex;align-items:center;gap:8px;font-size:12px;color:#b5bac1}
+.ig-embed-foot i{width:20px;height:20px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:#051018}
+.ig-embed-foot i svg{width:11px;height:11px}
+/* The card you write on: same card, every part a field. */
+.ig-above{width:100%;box-sizing:border-box;margin:0 0 6px;padding:5px 8px;border-radius:6px;border:1px dashed transparent;
+  background:transparent;color:#dbdee1;font:inherit;font-size:14px;outline:none;transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out)}
+.ig-above::placeholder,.ig-embed.edit input::placeholder,.ig-embed.edit .ig-msg::placeholder{color:#949ba4}
+.ig-above:hover,.ig-above:focus{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 5%,transparent)}
+.ig-above:focus-visible,.ig-embed.edit input:focus-visible{border-style:solid;border-color:var(--ec,var(--accent));
+  box-shadow:0 0 0 2px color-mix(in oklch,var(--ec,var(--accent)) 35%,transparent)}
+.ig-embed.edit{max-width:520px}
+.ig-embed.edit input{min-width:0;box-sizing:border-box;padding:4px 6px;margin:0;border-radius:5px;border:1px dashed transparent;
+  background:transparent;color:inherit;font:inherit;outline:none;transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out)}
+.ig-embed.edit input:hover,.ig-embed.edit input:focus{border-color:color-mix(in oklch,var(--ec) 60%,transparent);background:rgba(255,255,255,.03)}
+.ig-embed-title-in{width:100%;color:#f2f3f5 !important;font-size:16px !important;font-weight:600 !important}
+.ig-embed.edit .ig-msg{border-color:rgba(255,255,255,.12);background:transparent;font-size:14px}
+.ig-embed.edit .ig-msg:hover{border-color:rgba(255,255,255,.2);background:rgba(255,255,255,.02)}
+.ig-embed.edit .ig-msg:focus{border-color:var(--ec);box-shadow:0 0 0 2px color-mix(in oklch,var(--ec) 30%,transparent)}
+.ig-fields-edit{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:8px}
+.ig-field-edit{grid-column:span var(--span,4)}
+.ig-field-add{grid-column:1/-1}
+.ig-field-edit{position:relative;display:flex;flex-direction:column;gap:2px;padding:4px;border-radius:6px;background:rgba(0,0,0,.14)}
+.ig-field-edit.full{grid-column:1/-1}
+.ig-field-edit>:first-child,.ig-field-edit>:first-child input{color:#f2f3f5;font-weight:600;font-size:14px}
+.ig-field-edit>:first-child{padding-right:60px}
+.ig-field-edit>.ig-tpl:nth-child(2) :is(input,.ig-tpl-out){font-size:13.5px}
+.ig-field-edit .ic-btn-tiny,.ig-field-w{position:absolute;top:3px;width:24px;height:24px;opacity:0;transition:opacity .15s var(--ease-out)}
+.ig-field-edit .ic-btn-tiny{right:3px}
+.ig-field-w{right:29px;padding:0;border:0;border-radius:5px;background:#1e1f22;color:#b5bac1;
+  font-family:inherit;font-size:11px;font-weight:600;line-height:20px;cursor:pointer}
+.ig-field-edit:hover .ic-btn-tiny,.ig-field-edit:hover .ig-field-w,.ig-field-edit:focus-within .ic-btn-tiny,.ig-field-edit:focus-within .ig-field-w{opacity:1}
+.ig-field-add{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px;border-radius:6px;border:1px dashed rgba(255,255,255,.14);
+  background:transparent;color:#949ba4;font:inherit;font-size:12.5px;cursor:pointer;transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ig-field-add:hover{color:#dbdee1;border-color:color-mix(in oklch,var(--ec) 60%,transparent)}
+.ig-field-add svg{width:13px;height:13px}
+.ig-embed-foot.edit{display:flex;align-items:center;gap:8px;font-size:12px;color:#b5bac1}
+.ig-embed-foot.edit input{flex:0 1 auto;field-sizing:content;min-width:60px;max-width:100%;font-size:12px}
+.ig-embed-foot.edit .ig-foot-dot{color:#949ba4}
+.ig-ts-toggle{display:inline-flex;align-items:center;gap:5px;flex:none;padding:3px 8px;border-radius:999px;border:1px dashed rgba(255,255,255,.16);
+  background:transparent;color:#949ba4;font:inherit;font-size:11.5px;cursor:pointer;transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ig-ts-toggle svg{width:12px;height:12px}
+.ig-ts-toggle.on{border-style:solid;border-color:transparent;color:#b5bac1}
+.ig-ts-toggle:hover{color:#dbdee1}
+.ig-swatches{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
+.ig-swatch-set{display:contents}
+.ig-swatch{position:relative;width:22px;height:22px;padding:0;border-radius:50%;border:0;background:var(--sw);cursor:pointer;
+  box-shadow:0 0 0 2px #313338;transition:transform .15s var(--ease-out),box-shadow .15s var(--ease-out)}
+.ig-swatch:hover{transform:scale(1.1)}
+.ig-swatch:active{transform:scale(.94)}
+.ig-swatch.on{box-shadow:0 0 0 2px #313338,0 0 0 4px #f2f3f5}
+.ig-swatch.custom{background:conic-gradient(#f2665a,#fcd34d,#3fcf8e,#5ac8fa,#a78bfa,#ff7eb6,#f2665a);overflow:hidden}
+.ig-swatch.custom input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.ig-swatch:focus-visible,.ig-swatch.custom:focus-within{outline:2px solid #f2f3f5;outline-offset:3px}
+.ig-inspector .ig-swatches{margin-top:0}
+.ig-inspector .ig-swatch{box-shadow:0 0 0 2px var(--bg-2)}
+.ig-inspector .ig-swatch.on{box-shadow:0 0 0 2px var(--bg-2),0 0 0 4px var(--fg)}
+.ig-color-in{flex:1;min-width:120px}
+.ig-more-fields summary{cursor:pointer;color:var(--fg-3);font-size:12.5px;margin:2px 0 8px}
+.ig-more-fields[open] summary{color:var(--fg)}
+.ig-forms{margin-top:8px}
+.ig-forms dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0;font-size:12.5px}
+.ig-forms dt{font-family:var(--mono);color:var(--fg)}
+.ig-forms dd{margin:0;color:var(--fg-3)}
+.ig-forms dd b{margin-left:8px;font-weight:500;color:var(--fg-2)}
+@media (max-width:560px){.ig-forms dl{grid-template-columns:1fr}.ig-forms dd{margin-bottom:4px}}
+/* A timeline line, as {timeline} writes it. */
+.ig-pv-timeline{display:flex;flex-direction:column;gap:7px;color:var(--fg-2)}
+.ig-pv-timeline code{margin-right:7px;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--accent);font:600 10.5px var(--mono)}
+.ig-pv-tl-kind{align-self:flex-start;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));color:var(--accent)}
+.ig-pv-tl-kind.chapter{background:color-mix(in oklch,#a78bfa 18%,var(--surface-3));color:#a78bfa}
+.ig-pv-tl-kind.highlight{background:color-mix(in oklch,#fcd34d 18%,var(--surface-3));color:#fcd34d}
+/* Chat activity rules, each with a bar of where chat is right now. */
+.ig-rules{display:flex;flex-direction:column;gap:12px;container-type:inline-size}
+.ig-rules-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--fg-2)}
+.ig-rule-win{width:auto}
+.ig-rule-list{display:flex;flex-direction:column;gap:8px}
+.ig-rule{display:grid;grid-template-columns:minmax(150px,1fr) auto 72px auto auto;align-items:center;gap:8px;padding:10px 12px;
+  border-radius:10px;background:var(--bg-1);border:1px solid var(--line)}
+.ig-rule-at,.ig-rule-unit{font-size:12.5px;color:var(--fg-3);white-space:nowrap}
+.ig-rule-num{text-align:right}
+.ig-rule-words{grid-column:1/-1}
+.ig-rule-bar{grid-column:1/-1;position:relative;height:16px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.ig-rule-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px;min-width:0;background:color-mix(in oklch,var(--accent) 55%,transparent);
+  transition:width .5s var(--ease-out),background-color .3s var(--ease-out)}
+.ig-rule-bar i.on{background:color-mix(in oklch,var(--live) 70%,transparent)}
+/* Narrow homes (the builder's inspector, a phone): the rule's controls
+   share one line without "at least". */
+@container (max-width:420px){
+  .ig-rule{grid-template-columns:minmax(0,1fr) 64px auto auto}
+  .ig-rule .ig-rule-at{display:none}
+}
+.ig-rule-bar span{position:relative;display:block;padding:0 8px;font:600 10.5px/16px var(--mono);color:var(--fg);text-align:right}
+.ig-meter{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:9px 12px;border-radius:10px;background:var(--bg-1);
+  border:1px solid var(--line);font-size:12.5px}
+.ig-meter-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--fg-4)}
+.ig-meter-dot.fire{background:var(--live);box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 60%,transparent);animation:igMeterPulse 1.6s infinite}
+.ig-meter-dot.learn{background:var(--warn)}
+.ig-meter-dot.ok{background:var(--live)}
+.ig-meter-dot.wait{background:var(--warn);animation:igSoftPulse 1.4s ease-in-out infinite}
+@keyframes igSoftPulse{50%{opacity:.35}}
+.ig-meter-dot.off{background:var(--danger)}
+@keyframes igMeterPulse{70%{box-shadow:0 0 0 7px color-mix(in oklch,var(--live) 0%,transparent)}100%{box-shadow:0 0 0 0 transparent}}
+/* The OBS scene picker. */
+.ig-scene{display:flex;flex-direction:column;gap:10px}
+.ig-scene-list{display:flex;flex-wrap:wrap;gap:6px}
+.ig-start.live{position:relative;padding-left:22px}
+.ig-start.live::before{content:'';position:absolute;left:9px;top:50%;width:7px;height:7px;margin-top:-3.5px;border-radius:50%;background:var(--danger)}
+.ig-btn-row{display:flex;flex-wrap:wrap;gap:6px}
+.ig-params{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.ig-narrow{max-width:220px}
+@media (prefers-reduced-motion: reduce){
+  .ig-meter-dot.fire,.ig-meter-dot.wait{animation:none}
+  .ig-rule-bar i,.ig-swatch{transition:none}
+}
+@media (max-width:560px){
+  .ig-fields-edit,.ig-embed.big .ig-embed-fields{grid-template-columns:minmax(0,1fr)}
+  .ig-field-edit,.ig-embed-fields>div.in{grid-column:1/-1}
+  /* A phone gives the card the avatar's room. */
+  .ig-live-discord .ig-live-av{display:none}
+  .ig-live-discord .ig-live-msg{padding:12px}
+  .ig-embed.big{padding:8px 10px 12px 10px}
+}
+@media (prefers-reduced-motion: reduce){
+  .ig-skel::after{animation:none}
+  .ig-spin,.ic-btn.is-busy::after,.ic-btn-tiny.is-busy::after{animation-duration:1.6s}
+  .ig-row-peek,.ig-run-box,.ig-device,.ig-code,.ig-recipe,.ig-unsaved,.ig-guard,.ig-ping,.ig-added svg,.ig-ok svg,
+  .ig-activity-box[open] .ig-activity,.ig-modal.closing .dest-form,.ig-modal.closing .ic-modal-backdrop,
+  .ic-btn.ig-armed,.ic-btn-tiny.ig-armed,.ig-cat-grid>*,.ig-menu,.ig-picked,.ig-try-wrap{animation:none}
+  .ig-menu.closing{transition:none}
+  .ig-dot svg,.ig-role>span svg,.ig-opt svg,.ig-seg .sub-tab-ind{transition:none}
+}
+@media (max-width:760px){
+  .ig-bld,.ig-cat{flex-direction:column}
+  /* Stacked, the palette, canvas and inspector scroll as one page. */
+  .ig-bld{overflow-y:auto}
+  .ig-canvas,.ig-inspector{overflow-y:visible;flex:none}
+  .ig-palette,.ig-inspector,.ig-cat-nav{width:auto;border:0;border-bottom:1px solid var(--line)}
+  .ig-row-name{flex-basis:140px}.ig-row-last{display:none}
+}
+/* Top-anchored: a modal that grows (a chip opens, a taller tab) grows
+   downward, instead of re-centering and moving what's under the cursor. */
+.ig-modal{align-items:flex-start;padding-top:max(20px,6vh)}
+.ig-modal .dest-form{width:var(--ig-w,min(820px,100%));height:var(--ig-h,auto)}
+/* Phones: a full-screen sheet, the header kept to one row, the footer's
+   buttons wrapping with Save last and widest, and the builder's blocks a
+   strip to swipe instead of a list to scroll past. */
+@media (max-width:560px){
+  .ig-modal{padding:0}
+  .ig-modal .dest-form{width:100%;height:100dvh}
+  .ig-modal .dest-form-head{gap:10px}
+  .ig-modal .dest-form-head .dest-form-mark{display:none}
+  .ig-modal .dest-form-head{flex-wrap:wrap}
+  .ig-modal .dest-form-head .dest-form-titles{flex:1 1 60%}
+  .ig-modal .dest-form-head .ig-cat-acts{order:3;flex-basis:100%}
+  .ig-modal .dest-form-enable>span:last-child{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .ig-modal .dest-form-foot{flex-wrap:wrap;row-gap:10px}
+  .ig-modal .ig-foot-msg{order:-1;flex-basis:100%}
+  .ig-modal .dest-form-foot .ic-btn{flex:1 1 auto;justify-content:center}
+  .ig-palette{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;gap:4px;flex:none}
+  .ig-palette .ic-label{display:none}
+  .ig-palette button{flex:none;white-space:nowrap}
+}
+/* A template field: shows what it will say, and turns back into what you
+   wrote (variables and all) while you edit it. */
+.ig-tpl{position:relative;min-width:0}
+.ig-tpl-out{display:none;cursor:text;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:5px;border:1px dashed transparent}
+.ig-tpl-out:hover{border-color:rgba(255,255,255,.16)}
+.ig-tpl.has-vars:not(:focus-within)>.ig-tpl-out{display:block}
+.ig-tpl.has-vars:not(:focus-within)>.ig-tpl-in{position:absolute;inset:0;opacity:0;pointer-events:none}
+.ig-tpl.has-vars:focus-within~.ig-sample{display:block}
+.ig-tpl~.ig-sample:not(.ig-instead){display:none}
+.ig-tpl-out.msg{min-height:48px;padding:8px 10px;line-height:1.5;border-radius:8px;
+  border:1px dashed color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 5%,transparent)}
+.ig-embed.edit .ig-tpl-out.msg{border-color:rgba(255,255,255,.12);background:transparent;font-size:14px}
+.ig-live-phone .ig-tpl-out.line{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.08);font-size:13px}
+.ig-tpl-out.line{padding:4px 6px;line-height:20px}
+.ig-embed.edit input{line-height:20px}
+.ig-embed-title-in{line-height:22px !important}
+.ig-tpl-out.title{padding:4px 6px;color:#f2f3f5;font-size:16px;font-weight:600;line-height:22px}
+.ig-tpl-out.above{padding:5px 8px;margin:0 0 6px;font-size:14px}
+.ig-tpl-out .ig-tpl-none{color:#949ba4;font-style:italic}
+.ig-tpl-out .ig-tpl-hint{float:right;margin-left:8px;padding:0 5px;border-radius:4px;background:rgba(255,255,255,.06);
+  font:500 10px/1.8 var(--mono);color:#949ba4;text-transform:uppercase;letter-spacing:.04em}
+/* The channel header when no channel is picked. */
+.ig-live-head .hash.none+span,.ig-live-head button.none{color:var(--warn);font-style:italic}
+.ig-live-head button{padding:0;border:0;background:none;font:inherit;cursor:pointer;color:inherit}
+.ig-live-meta .ig-when{color:#949ba4;font-size:12px;font-weight:400;margin-left:2px}
+/* What still blocks switching on, under a card's name. */
+.dcard-host.ig-host-warn{color:var(--warn)}
+.dcard-host.ig-host-bad{color:var(--danger)}
+.ig-foot-need{color:var(--warn);font-size:12px;flex:1 1 220px;min-width:0;text-wrap:pretty}
+/* Builder: a switched-off step, one that misses something, insert points. */
+.ig-step.off :is(.ig-step-ic,.ig-step-kind,.ig-step-text){opacity:.6}
+.ig-step.off .ig-step-text{text-decoration:line-through;text-decoration-color:var(--fg-4)}
+.ig-step.warn{box-shadow:inset 3px 0 0 var(--warn)}
+.ig-step-warn{flex:none;color:var(--warn);font-size:11px;white-space:nowrap}
+.ig-step-warn.soft{color:color-mix(in srgb,var(--warn) 65%,var(--fg-3));max-width:45%;overflow:hidden;text-overflow:ellipsis}
+/* Stacked, the settings are far below the steps: a way back up. */
+.ig-insp-back{display:none;align-items:center;gap:6px;margin:0 0 12px;padding:0;border:0;background:none;color:var(--accent);
+  font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.ig-insp-back svg{width:13px;height:13px}
+@media (max-width:760px){.ig-insp-back{display:inline-flex}}
+.ig-drop.after{min-height:28px;margin:-3px 0 1px 46px;padding:3px 10px;font-size:11.5px}
+/* A moment that still misses something. */
+.ig-moment-name.warn,.ig-mchip-name.warn{color:var(--warn)}
+/* A moment that still misses something: a small amber dot after its name. */
+.ig-moment-name.warn::after,.ig-mchip-name.warn::after{content:'';display:inline-block;width:6px;height:6px;margin-left:6px;
+  border-radius:50%;background:currentColor;vertical-align:2px}
+/* Builder: a card's fields as rows, and the step's preview. */
+.ig-bfields{display:flex;flex-direction:column;gap:6px}
+.ig-bfield{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto;gap:6px;align-items:center}
+.ig-bfield .ic-btn-tiny svg{width:13px;height:13px}
+.ig-insp-pv{padding:10px;border-radius:8px;max-height:220px;overflow:auto}
+.ig-field-w svg{width:12px;height:12px;vertical-align:-2px}
+/* Duration fields. */
+.ig-dur[aria-invalid="true"],.ig-param[aria-invalid="true"]{border-color:var(--danger)}
+/* Test panel. */
+.ig-testbox{display:flex;flex-direction:column;gap:10px}
+.ig-test-values{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px}
+.ig-test-values .dff label{font-family:inherit}
+.ig-test-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+/* The OBS step. Its picker field spaces its parts a little wider than a plain field. */
+.ig-picker{gap:8px}
+.ig-pick-h{display:flex;align-items:baseline;gap:8px;min-width:0}
+.ig-pick-l{flex:1 1 0;min-width:0;font-size:12px;font-weight:600;color:var(--fg-2)}
+.ig-pick-sum{flex:0 1 auto;max-width:45%;font-size:11.5px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-pick-clear{flex:none;background:none;border:0;padding:0;font:inherit;font-size:11.5px;color:var(--accent);cursor:pointer}
+.ig-pick-clear:hover{text-decoration:underline}
+.ig-pick-h,.ig-pick-box{width:100%}
+.ig-pick-box{min-width:0;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);overflow:hidden}
+.ig-pick-box:focus-within{border-color:color-mix(in oklch,var(--accent) 45%,var(--line))}
+.ig-pick-find{display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--line)}
+.ig-pick-find svg{width:14px;height:14px;flex:none;color:var(--fg-4)}
+.ig-pick-find input{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--fg);font:inherit;font-size:13px;padding:9px 0}
+.ig-pick-find input::placeholder{color:var(--fg-4)}
+.ig-pick-list{max-height:196px;overflow-y:auto;padding:4px;display:flex;flex-direction:column;gap:1px;overscroll-behavior:contain}
+.ig-pick-row{display:flex;align-items:center;gap:9px;width:100%;min-width:0;min-height:30px;padding:5px 8px;border:0;border-radius:6px;
+  background:none;color:var(--fg-2);font:inherit;font-size:13px;text-align:left;cursor:pointer;
+  transition:background-color .12s var(--ease-out),color .12s var(--ease-out)}
+.ig-pick-row:hover,.ig-pick-row:focus-visible{background:var(--surface-3);color:var(--fg);outline:0}
+.ig-pick-row.on{color:var(--fg)}
+.ig-pick-row.new{color:var(--accent)}
+.ig-pick-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-pick-mark{width:15px;height:15px;flex:none;display:grid;place-items:center;border-radius:50%;color:var(--accent);
+  transition:background-color .18s var(--ease-out),border-color .18s var(--ease-out),transform .3s var(--ease-spring)}
+.ig-pick-mark.box{border-radius:4px;border:1.5px solid var(--line-2);color:var(--accent-ink)}
+.ig-pick-mark svg{width:10px;height:10px}
+.ig-pick-mark svg path{stroke-dasharray:24;stroke-dashoffset:24;transition:stroke-dashoffset .25s var(--ease-out)}
+.ig-pick-row:hover .ig-pick-mark.box{border-color:var(--fg-3)}
+.ig-pick-row.on .ig-pick-mark svg path{stroke-dashoffset:0;transition-delay:.06s}
+.ig-pick-row.on .ig-pick-mark.box{background:var(--accent);border-color:var(--accent);animation:igTick .35s var(--ease-spring)}
+.ig-pick-row:active .ig-pick-mark{transform:scale(.85);transition-duration:.08s}
+@keyframes igTick{0%{transform:scale(.7)}60%{transform:scale(1.15)}100%{transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .ig-sound.ig-playing .ig-btn-ic,.ig-pick-row.on .ig-pick-mark.box{animation:none}
+  .ig-swatch,.ig-pick-mark svg path{transition:none}
+}
+.ig-pick-none{padding:10px 8px;font-size:12px;color:var(--fg-4)}
+/* The Smart light step: the device picker, a bulb in the step's color,
+   and color swatches. */
+.ig-light-pick{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.ig-light-pick>.ig-meter,.ig-light-list{align-self:stretch}
+.ig-light-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto}
+.ig-light-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg-1)}
+.ig-light-row.on{border-color:color-mix(in oklch,var(--accent) 55%,var(--line))}
+.ig-light-id{flex:1;min-width:0;display:flex;flex-direction:column}
+.ig-light-id b,.ig-light-id small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-light-id small{color:var(--fg-3)}
+.ig-bulb{flex:none;display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;
+  background:color-mix(in oklch,var(--bulb) 30%,transparent);color:var(--bulb);border:1px solid color-mix(in oklch,var(--bulb) 55%,var(--line))}
+.ig-bulb svg{width:15px;height:15px}
+.ig-bulb.off{color:var(--fg-3);border-color:var(--line)}
+.ig-bulb.flash{animation:ig-bulb-flash 1.1s steps(2,jump-none) infinite}
+@keyframes ig-bulb-flash{50%{opacity:.25}}
+.ig-pv-action .ig-bulb{width:30px;height:30px;border-radius:50%;background:color-mix(in oklch,var(--bulb) 30%,transparent);
+  color:var(--bulb);border:1px solid color-mix(in oklch,var(--bulb) 55%,var(--line))}
+.ig-pv-action .ig-bulb.off{color:var(--fg-3);border-color:var(--line)}
+.ig-swatch-pick{width:30px;height:26px;padding:0;border:1px solid var(--line);border-radius:8px;background:none;cursor:pointer}
+@media (prefers-reduced-motion: reduce){.ig-bulb.flash{animation:none}}
+/* Touch screens have no hover: keep controls in sight, and big enough. */
+@media (hover:none){
+  .ig-field-edit .ic-btn-tiny,.ig-field-w,.ig-card .ig-more,.ig-step-tools{opacity:1}
+}
+@media (pointer:coarse){
+  .ig-field-edit .ic-btn-tiny,.ig-field-w{width:32px;height:32px;line-height:32px}
+  .ig-field-w{right:37px}
+  .ig-field-edit>:first-child{padding-right:76px}
+  .ig-vchip,.ig-ts-toggle{padding:5px 10px}
+  .ig-swatch{width:28px;height:28px}
+}

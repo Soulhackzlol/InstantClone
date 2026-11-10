@@ -21,7 +21,7 @@
 <br/>
 <br/>
 
-<sub><a href="https://youtu.be/y3aj88gTAOs"><b>▶ Watch the setup tutorial</b></a> &nbsp;·&nbsp; Spanish audio, English subtitles</sub>
+<sub><a href="https://youtu.be/MK02-bGvD8I"><b>▶ Watch the setup tutorial</b></a> &nbsp;·&nbsp; Spanish or English audio, with subtitles</sub>
 
 <br/>
 <br/>
@@ -79,16 +79,11 @@ That's the whole install. On Windows a tray icon sits in the systray while it ru
 
 **2 · Point OBS at it**
 
-Close OBS, click **Register with OBS** in the dashboard's **OBS** tab, then open OBS and in **Settings → Stream** pick:
+Close OBS and click **Register with OBS** in the dashboard's **OBS** tab (setup offers it too). OBS's current profile now streams to InstantClone, key included: open OBS and press **Start Streaming**. Your old stream settings are kept, and **Unregister** puts them back.
 
-```text
-Service:  InstantClone
-Key:      main          (any string works)
-```
+**Multi-track via InstantClone** works on Auto out of the box. Your real platform keys go into the **Destinations** tab, not OBS. Streaming to Twitch? Setup's **Get my key from Twitch** fills it in with one approval.
 
-**Multi-track via InstantClone** works on Auto out of the box. Your real platform keys go into the **Destinations** tab, not OBS.
-
-<sub>Prefer manual? Service <b>Custom</b>, Server <code>rtmp://localhost:1935/live</code>, Key <code>main</code>. On Streamlabs Desktop, connect it from the same tab instead.</sub>
+<sub>OBS never opened yet, or prefer to pick it yourself? In <b>Settings → Stream</b> choose Service <b>InstantClone</b>, any key (<code>main</code>). Manual: Service <b>Custom</b>, Server <code>rtmp://localhost:1935/live</code>, Key <code>main</code>. On Streamlabs Desktop, connect it from the same tab instead.</sub>
 
 </td>
 </tr>
@@ -155,7 +150,7 @@ In OBS, turn on **Enhanced Broadcasting** (**Multi-track via InstantClone** on t
 <td valign="top">
 
 **🎚 VOD audio + copyright-safe routing**
-Keep music live but out of the recording. One click adds a second audio track (via a bundled OBS script); then per destination pick an **Audio track**, Twitch keeps **Both**, send the clean **Track 2** to YouTube to dodge copyright, or **Track 1** to Kick.
+Keep music live but out of the recording. A short guide in the dashboard adds a second audio track (a bundled OBS script, three steps); then per destination pick an **Audio track**, Twitch keeps **Both**, send the clean **Track 2** to YouTube to dodge copyright, or **Track 1** to Kick.
 
 </td>
 </tr>
@@ -204,7 +199,7 @@ Map the same actions to a pad or knob, learned by pressing the control rather th
 <tr>
 <td valign="top">
 
-**🎬 Streamlabs Desktop (experimental)**
+**🎬 Streamlabs Desktop**
 Connect it once from the **OBS** tab and keep going live from Streamlabs' own **Go Live** button, signed in with Twitch. Enhanced Broadcasting and the Twitch VOD Track keep working, and what goes out is up to you: YouTube, Kick, any RTMP, with or without a Twitch destination.
 
 </td>
@@ -226,8 +221,8 @@ If OBS crashes or freezes, every destination stays live on a reconnect screen (f
 <tr>
 <td valign="top" colspan="2">
 
-**🧩 Integrations (experimental)**
-InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. It can start on follows, subs, gifted subs, bits, raids, channel point rewards and ad breaks, and on OBS recording, replays or a muted mic. One click adds a crash alert, on-stream Twitch alerts, a `!delay` command, mod controls, a highlight button that clips what viewers actually saw, a Discord card that writes your stream's timeline, YouTube chapters, an on-air light and more, and a step builder covers the rest, down to OBS scenes, filters, recording and hotkeys, and smart lights and plugs on your network (WiZ, LIFX, Govee, Yeelight, Kasa, Shelly, WLED) with no hub. They're new and may still change: please report what breaks or confuses you with the tab's **Report it** link.
+**🧩 Integrations**
+InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. It can start on follows, subs, gifted subs, bits, raids, channel point rewards and ad breaks, and on OBS recording, replays or a muted mic. One click adds a crash alert, on-stream Twitch alerts, a `!delay` command, mod controls, a highlight button that clips what viewers actually saw, a Discord card that writes your stream's timeline, YouTube chapters, an on-air light and more, and a step builder covers the rest, down to OBS scenes, filters, recording and hotkeys, and smart lights and plugs on your network (WiZ, LIFX, Govee, Yeelight, Kasa, Shelly, WLED) with no hub. Something not working? Every integration's menu has **Report a problem**.
 
 </td>
 </tr>
@@ -456,7 +451,7 @@ Yes, both. Six actions bind to a global keyboard shortcut, a MIDI pad or knob, o
 
 <br/>
 
-Yes, as an experimental feature. Connect it once from the **OBS** tab (or the first step of setup), sign Streamlabs in with Twitch and go live from its **Go Live** button. You don't change anything inside Streamlabs. If it's signed in with another platform, the dashboard says so.
+Yes. Connect it once from the **OBS** tab (or the first step of setup), sign Streamlabs in with Twitch and go live from its **Go Live** button. You don't change anything inside Streamlabs. If it's signed in with another platform, the dashboard says so.
 
 </details>
 

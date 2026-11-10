@@ -1,0 +1,140 @@
+/* - Card / labels / buttons / inputs (atoms) ------─ */
+.ic-card{background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
+/* Section titles read as titles: a step brighter than the words under them. */
+.ic-label{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--fg-2)}
+
+.ic-btn{appearance:none;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:10px 16px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface-3);
+  color:var(--fg);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;
+  transition:transform .15s var(--ease-out),background .15s var(--ease-out),border-color .15s var(--ease-out),
+             box-shadow .15s var(--ease-out)}
+.ic-btn:hover:not(:disabled,.ic-btn-disabled){background:color-mix(in oklch,var(--tint) 7%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--tint) 38%,rgba(255,255,255,.16));
+  box-shadow:0 8px 20px -12px color-mix(in oklch,var(--tint) 70%,transparent);transform:translateY(-1px)}
+.ic-btn:active{transform:scale(.96);transition-duration:.08s}
+/* Cards ease in, staggered, when their tab opens (see staggerIn). No end
+   opacity: each card fades to its own, so a switched-off one is dim from
+   the start instead of bright until the animation ends. */
+.stagger-in{animation:staggerIn .34s var(--ease-out) both;animation-delay:var(--stagger,0ms)}
+@keyframes staggerIn{from{opacity:0;transform:translateY(8px);filter:blur(3px)}to{transform:none;filter:none}}
+@media (prefers-reduced-motion: reduce){.stagger-in,.dcard.went-live{animation:none}}
+/* Copy confirmation: the button turns success-green with a check that pops
+   in (scale + blur per motion guidelines). Applied by flashCopied(). */
+.ic-btn.is-copied{color:var(--live) !important;
+  border-color:color-mix(in oklch,var(--live) 40%,transparent) !important;
+  background:color-mix(in oklch,var(--live) 12%,var(--surface-3)) !important}
+.ic-btn.is-copied .cp-ico{display:inline-block;margin-right:5px;font-weight:700;
+  animation:cpIcoIn .3s cubic-bezier(0.2,0,0,1)}
+@keyframes cpIcoIn{from{opacity:0;transform:scale(.25);filter:blur(4px)}
+  to{opacity:1;transform:none;filter:blur(0)}}
+.ic-btn-primary{background:linear-gradient(180deg,color-mix(in oklch,#fff 14%,var(--accent)),var(--accent));
+  color:var(--accent-ink);border-color:transparent;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),
+    0 8px 26px -6px var(--accent-glow);font-weight:600}
+/* Matches the generic .ic-btn hover's specificity, which otherwise wins and
+   paints dark accent-ink text on the dark surface fill. */
+.ic-btn-primary:hover:not(:disabled,.ic-btn-disabled){border-color:transparent;
+  background:linear-gradient(180deg,color-mix(in oklch,#fff 22%,var(--accent)),color-mix(in oklch,#fff 6%,var(--accent)));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 0 0 1px color-mix(in oklch,var(--accent) 70%,transparent),
+    0 12px 32px -6px color-mix(in oklch,var(--accent) 50%,transparent)}
+/* Surfaces catch light on their top edge, like the hero. */
+.ic-card,.pane-card,.tabs,.dcard,.stat-card,.metric-mini,.sys-section,.obs-section{border-top-color:rgba(255,255,255,.11)}
+/* Disabled state - has to read as "available but inert" even when
+   parented to a dark card. Previous styling (surface-3 at 0.55 alpha)
+   blended into card backgrounds. Now: opaque surface-3 fill + a
+   visible line-2 stroke + fg-3 ink, so the button has the same
+   visual weight as an enabled ghost button minus the hover. */
+.ic-btn-primary:disabled,.ic-btn-disabled{opacity:1;cursor:not-allowed;box-shadow:none;
+  background:var(--surface-3) !important;color:var(--fg-3) !important;
+  border-color:var(--line-2) !important}
+.ic-btn-danger{background:color-mix(in oklch,var(--danger) 18%,var(--bg-2));color:var(--danger);
+  border-color:color-mix(in oklch,var(--danger) 50%,var(--line));font-weight:600}
+.ic-btn-danger:hover:not(:disabled){background:color-mix(in oklch,var(--danger) 25%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--danger) 55%,transparent);
+  box-shadow:0 8px 22px -12px color-mix(in oklch,var(--danger) 80%,transparent)}
+.ic-btn-ghost{background:transparent;border-color:var(--line);color:var(--fg-2)}
+.ic-btn-ghost:hover{background:color-mix(in oklch,var(--tint) 8%,var(--surface-3));color:var(--fg)}
+.ic-btn-tiny{appearance:none;background:transparent;border:0;width:28px;height:28px;border-radius:6px;
+  display:inline-flex;align-items:center;justify-content:center;color:var(--fg-3);cursor:pointer;
+  transition:background .15s var(--ease-out),color .15s var(--ease-out);flex:0 0 auto}
+.ic-btn-tiny:hover{background:color-mix(in oklch,var(--tint) 12%,var(--surface-3));color:var(--fg)}
+.ic-btn.big{padding:12px 22px;font-size:14px}
+
+.ic-input{width:100%;padding:10px 12px;border-radius:10px;background-color:var(--bg-2);
+  border:1px solid var(--line);color:var(--fg);font-size:13px;outline:none;
+  transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out),box-shadow .25s var(--ease-out)}
+.ic-input:hover{border-color:color-mix(in oklch,var(--tint) 32%,var(--line-2));
+  background-color:color-mix(in oklch,var(--tint) 3%,var(--bg-2))}
+.ic-input:focus{border-color:color-mix(in oklch,var(--tint) 80%,transparent);background-color:var(--surface);
+  box-shadow:0 0 0 3px color-mix(in oklch,var(--tint) 20%,transparent),
+    0 8px 22px -14px color-mix(in oklch,var(--tint) 80%,transparent)}
+.ic-input::placeholder{color:var(--fg-4);transition:opacity .2s var(--ease-out)}
+.ic-input:focus::placeholder{opacity:.5}
+.ic-input.field-error:focus{border-color:var(--danger);box-shadow:0 0 0 3px color-mix(in oklch,var(--danger) 22%,transparent)}
+label{transition:color .2s var(--ease-out)}
+.dff:focus-within>label,.form-row>div:focus-within>label,.st-field:focus-within>label,
+label:has(+ .ic-input:focus),label:has(+ select:focus){color:var(--tint)}
+/* Dropdowns: our own chevron everywhere; in browsers with customizable
+   selects (Chrome/Edge 135+) the list itself becomes a styled popup that
+   fades and slides in. Older engines (the OBS dock's CEF) keep the native
+   list, which still works the same. */
+select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:34px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237d8694' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");background-repeat:no-repeat;
+  background-position:right 12px center;background-size:12px}
+@supports (appearance:base-select){
+  select.ic-input,select.ic-input::picker(select){appearance:base-select}
+  select.ic-input{display:flex;align-items:center;gap:8px;background-image:none;padding-right:12px}
+  select.ic-input::picker-icon{content:'';flex:none;width:12px;height:12px;margin-left:auto;
+    background:var(--fg-3);-webkit-mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>") center/contain no-repeat;mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>") center/contain no-repeat;
+    transition:rotate .3s var(--ease-spring),background-color .2s var(--ease-out)}
+  select.ic-input:hover::picker-icon{background:var(--fg-2)}
+  select.ic-input:open::picker-icon{rotate:180deg;background:var(--tint)}
+  select.ic-input::picker(select){margin-block:6px;padding:5px;border-radius:12px;color:var(--fg);
+    background:var(--surface-2);border:1px solid color-mix(in oklch,var(--tint) 30%,var(--line-2));
+    box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 22px 48px -14px rgba(0,0,0,.7),
+      0 10px 30px -18px color-mix(in oklch,var(--tint) 70%,transparent);
+    opacity:0;transform:translateY(-6px) scale(.98);transform-origin:top center;
+    transition:opacity .18s var(--ease-out),transform .24s var(--ease-out),
+      overlay .24s allow-discrete,display .24s allow-discrete}
+  select.ic-input:open::picker(select){opacity:1;transform:none}
+  @starting-style{select.ic-input:open::picker(select){opacity:0;transform:translateY(-6px) scale(.98)}}
+  select.ic-input option{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+    font-size:13px;color:var(--fg-2);cursor:pointer;
+    transition:background-color .15s var(--ease-out),color .15s var(--ease-out)}
+  select.ic-input option:hover,select.ic-input option:focus-visible{outline:none;color:var(--fg);
+    background:color-mix(in oklch,var(--tint) 14%,transparent)}
+  select.ic-input option:checked{color:var(--fg);font-weight:600}
+  select.ic-input option::checkmark{order:1;margin-left:auto;color:var(--tint)}
+  select.ic-input option:disabled{color:var(--fg-4);cursor:not-allowed;background:none}
+  /* The first rows ease in one after another as the list opens. */
+  select.ic-input:open option{animation:optionIn .26s var(--ease-out) both;
+    animation-delay:calc(min(sibling-index(),8) * 16ms)}
+}
+@keyframes optionIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .ic-btn:hover{transform:none}
+  select.ic-input::picker(select){transform:none}
+  select.ic-input:open option{animation:none}
+}
+.ic-input.field-error{border-color:var(--danger);background:color-mix(in oklch,var(--danger) 5%,var(--bg-2));
+  animation:fieldShake .35s cubic-bezier(.36,.07,.19,.97)}
+@keyframes fieldShake{10%,90%{transform:translateX(-1px)} 20%,80%{transform:translateX(2px)} 30%,50%,70%{transform:translateX(-3px)} 40%,60%{transform:translateX(3px)}}
+
+/* A caution button (warn) and a danger button that cannot be pressed yet. */
+.ic-btn-warn{background:color-mix(in oklch,var(--warn) 18%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--warn) 45%,var(--line));color:var(--warn)}
+.ic-btn-warn:hover:not(:disabled,.ic-btn-disabled){background:color-mix(in oklch,var(--warn) 28%,var(--bg-2));
+  border-color:color-mix(in oklch,var(--warn) 60%,var(--line))}
+.ic-btn-danger:disabled{opacity:.45;cursor:not-allowed}
+/* The trail (flyTrail in page/motion.js): sparks in viewport coordinates,
+   above everything. Accent by default; amber for a profile's launch. */
+.trail-spark{position:fixed;left:0;top:0;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;
+  pointer-events:none;z-index:1105;background:color-mix(in oklch,var(--accent) 45%,white);
+  box-shadow:0 0 10px 3px color-mix(in oklch,var(--accent) 75%,transparent)}
+.trail-spark.warm{background:oklch(0.93 0.12 85);box-shadow:0 0 10px 3px color-mix(in oklch,var(--warn) 75%,transparent)}
+/* Where the trail lands: a ring that opens out and fades. */
+.trail-land{position:fixed;left:0;top:0;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;pointer-events:none;z-index:1104;
+  border:2px solid color-mix(in oklch,var(--accent) 70%,white);box-shadow:0 0 16px var(--accent-glow)}
+.trail-land.warm{border-color:oklch(0.9 0.13 85);box-shadow:0 0 16px color-mix(in oklch,var(--warn) 55%,transparent)}

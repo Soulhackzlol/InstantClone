@@ -1,0 +1,59 @@
+/* - Quick guides (tour/guides.js) ----------------------------------------------
+   The ? menu, the ring on the control a step is about, and its note. */
+.help-menu{position:fixed;z-index:1102;width:290px;max-height:calc(100vh - 80px);overflow-y:auto;padding:6px;border-radius:12px;border:1px solid var(--line-2);
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));box-shadow:0 24px 60px rgb(0 0 0 / .5);
+  display:flex;flex-direction:column;gap:2px;animation:tipIn .22s var(--ease-out) both}
+.help-menu button{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:8px 10px;border-radius:8px;
+  border:0;background:none;color:var(--fg-2);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.help-menu button span{color:var(--fg-4);font-size:11.5px;white-space:nowrap}
+.help-menu button:hover,.help-menu button:focus-visible{background:var(--surface-3);color:var(--fg);outline:none}
+.help-menu button b{color:var(--fg)}
+.help-menu-h{padding:8px 10px 4px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-4)}
+/* Folders: one open at a time, its guides sliding open under the head. */
+.help-menu .help-folder-h{font-weight:600;color:var(--fg)}
+.help-folder-h::after{content:"";width:6px;height:6px;margin-left:-6px;border:solid var(--fg-4);border-width:0 1.5px 1.5px 0;
+  transform:translateY(-2px) rotate(45deg);transition:transform .2s var(--ease-out);order:3;align-self:center}
+.help-folder.open .help-folder-h::after{transform:translateY(1px) rotate(-135deg)}
+.help-folder-b{display:grid;grid-template-rows:0fr;transition:grid-template-rows .24s var(--ease-out)}
+.help-folder.open .help-folder-b{grid-template-rows:1fr}
+.help-folder-b>div{overflow:hidden;display:flex;flex-direction:column;gap:2px;padding-left:8px}
+.help-folder-b button{justify-content:flex-start}
+.help-folder-b button span{margin-left:auto}
+/* Not .help-hint: that is the header's floating "New here?" bubble. */
+.guide-suggest{font-style:normal;font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;align-self:center;white-space:nowrap;
+  color:var(--accent);background:color-mix(in oklch,var(--accent) 14%,transparent)}
+.help-hint-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);align-self:center;margin-right:auto;
+  box-shadow:0 0 8px var(--accent-glow)}
+.help-tick{flex:none;width:14px;height:14px;align-self:center;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--line-2)}
+.help-tick.on{background:var(--ok);box-shadow:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23061a0e' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E");
+  background-size:10px;background-position:center;background-repeat:no-repeat}
+
+.guide-ring{position:fixed;z-index:1100;border-radius:12px;pointer-events:none;opacity:0;
+  border:2px solid var(--accent);box-shadow:0 0 0 4px color-mix(in oklch,var(--accent) 18%,transparent),0 0 28px var(--accent-glow);
+  transition:opacity .25s var(--ease-out)}
+.guide-ring.in{opacity:1;animation:guideRingIn .34s var(--ease-out),guidePulse 1.6s var(--ease-out) .34s 2}
+@keyframes guideRingIn{from{opacity:0;transform:scale(1.08)}}
+.guide-ring.done{border-color:var(--ok);box-shadow:0 0 0 4px color-mix(in oklch,var(--ok) 22%,transparent),0 0 28px color-mix(in oklch,var(--ok) 40%,transparent)}
+@keyframes guidePulse{50%{box-shadow:0 0 0 9px color-mix(in oklch,var(--accent) 6%,transparent),0 0 36px var(--accent-glow)}}
+.guide-note{position:fixed;z-index:1101;width:320px;max-width:calc(100vw - 24px);padding:12px 14px;border-radius:12px;
+  border:1px solid var(--line-2);background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  box-shadow:0 24px 60px rgb(0 0 0 / .5),0 0 0 1px var(--accent-glow);
+  opacity:0;transform:translateY(4px);pointer-events:none;transition:opacity .2s var(--ease-out),transform .2s var(--ease-out)}
+.guide-note.in{opacity:1;transform:none;pointer-events:auto}
+.guide-head{display:flex;align-items:center;gap:8px;font-size:13px}
+.guide-head .ic-btn-tiny{margin-left:auto}
+.guide-count{font-size:11px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
+.guide-note p{margin:8px 0 10px;font-size:12.5px;line-height:1.55;color:var(--fg-2)}
+.guide-foot{display:flex;justify-content:flex-end;gap:8px}
+.guide-foot [data-go="back"]{margin-right:auto}
+.guide-dots{display:flex;gap:4px;margin-top:8px}
+.guide-dots i{flex:1;height:3px;border-radius:2px;background:var(--line-2);transition:background .3s var(--ease-out)}
+.guide-dots i.was{background:color-mix(in oklch,var(--accent) 55%,var(--line-2))}
+.guide-dots i.now{background:var(--accent)}
+.guide-wait{display:flex;align-items:center;gap:8px;margin:-2px 0 10px;font-size:12px;color:var(--fg-3)}
+.guide-wait-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);animation:guideWaitPulse 1.2s ease-in-out infinite}
+@keyframes guideWaitPulse{50%{opacity:.3;transform:scale(.7)}}
+.guide-wait.ok{color:var(--ok)}
+.guide-wait.ok .guide-wait-dot{background:var(--ok);animation:none}
+@media (prefers-reduced-motion:reduce){.guide-ring.in,.guide-wait-dot{animation:none}.guide-note,.help-folder-b{transition:none}}

@@ -4,6 +4,158 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - Polish, stability, and a friendlier first run
+
+### Setup
+
+- **Get my key from Twitch.** Approve once on twitch.tv and your stream key
+  goes straight into your Twitch destination, nothing to copy. The same
+  approval connects Twitch in Integrations too, unless an account is already
+  connected there; otherwise the login is thrown away.
+- Once a key is imported, the paste field hides. Skipping setup or picking
+  another platform stops asking Twitch.
+- **OBS is set up for you.** Registering with OBS (closed) also switches its
+  current profile to stream to InstantClone, key included, so there is
+  nothing to pick in OBS. Your old stream settings are kept, and
+  **Unregister** puts them back, unless you moved that profile elsewhere
+  since. Settings InstantClone can't read are never overwritten.
+- Every setup step's heading is centred, and the last button reads
+  **Save and start**.
+
+### Guides and the tour
+
+- **The ? button** opens the tour and quick guides in three folders: Getting
+  started, Integrations and On stream. It remembers the folder you had open,
+  ticks the guides you finish and marks the one that fits you now as
+  Suggested.
+- **Guides know your setup.** "Add your first integration" becomes "Add
+  another integration" once you have some, and steps for things you haven't
+  added are skipped.
+- A step can do its part for you, or wait for you to do it and move on by
+  itself.
+- New Integrations guides: your first integration, connecting accounts,
+  Discord, chat commands, alert levels, building your own and folders. On
+  stream: alerts, and goals and timers.
+- **A guiding trail** flies from where you are looking to the next control,
+  waits for it to stop moving and lands with a ripple.
+- The tour waits for the dashboard, explains what the OBS tab is for and
+  shows the compact button.
+- **A VOD audio guide**, step by step (download the script, add it to OBS,
+  check it), in the destination form, setup and System. It remembers where
+  you got to.
+
+### Integrations
+
+- **No longer experimental.** A full live pass on a real Twitch channel: 27
+  runs, a real OBS crash included, none failed.
+- **Starter packs** for the kind of stream you run: First streams,
+  Competitive, Subathon and Community hub, with new cards in the catalog and
+  on an empty Integrations page.
+- **New presets** that replace Streamer.bot actions:
+  - **Ad break notice**: chat hears how long the ad lasts, then "We're
+    back!".
+  - **Mute me**: a channel point reward mutes your mic for 10 seconds, shown
+    on stream.
+- A wait filled in from a value can last up to 3 minutes, Twitch's longest
+  ad break.
+- **Undo and redo** in every editor: Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, and
+  the footer arrows. A deleted moment, step or trigger, a deleted
+  integration, destination or profile, and a folder move all come back from
+  their toast; Ctrl+Z on the page presses the newest Undo.
+- **Alert levels** (was "Bigger ones"): a second, bigger alert for big
+  amounts of bits, resub months, gifted subs and raids. Units and layout
+  fixed.
+- **A clearer editor**: numbered sections (which alerts, what it says,
+  options), moments as chips with their own switch, and the first time, a
+  trail from the moment to what it edits.
+- **Folders**: a floating drop zone while you drag, and Undo after a move.
+- Connections that aren't set up read as an invitation (Add +, Connect +),
+  not an error.
+- Catalog search finds Spanish words, and catalog previews, sample alerts
+  and step descriptions show in your language.
+- Subathon reset is an icon button. Light colours have names, and the colour
+  box is for colours other than the swatches.
+- The alert preview shows a built-in design before it has been saved, as
+  the live alerts page already did.
+- Highlight markers say who marked them: you, or a mod in chat.
+
+### OBS and Streamlabs Desktop
+
+- **Streamlabs Desktop is no longer experimental** after a live pass: Go
+  Live through InstantClone with the delay, cut, stop and disconnect.
+- **The OBS tab** starts with your streaming apps, then the dock, chat and
+  recommended settings; another app or a Custom RTMP server is folded away
+  at the bottom.
+
+### Crash protection
+
+- **The preview moves frame for frame as viewers see it**, for every style
+  (tested against the 30 fps stream), and pauses while scrolled out of view.
+- The **End crash protection** hotkey only shows when it is bound.
+
+### Lighter and faster
+
+- **The OBS dock** while live: 116 to 2 ms of work a second. **The
+  dashboard**: 99 to 15. **The Studio**: 143 to 11. Looping pulses now run
+  off the main thread.
+- **System fonts**: the dashboard and the dock no longer call Google Fonts,
+  so nothing is fetched when they open, offline included.
+- Hidden tabs are laid out in idle time, so the first visit is instant.
+- **The header stays on one line** while live, tightening its least useful
+  details first. Warnings and the update button are never shortened.
+- **The compact delay panel** is the default on short windows and phones,
+  until you choose.
+- Section strips in System, Overlays and the OBS tab stay in reach while you
+  scroll, and what passes under them fades instead of being cut.
+
+### Look and feel
+
+- Panels inside cards and dialogs have the darker, recessed background they
+  were always meant to have.
+- Overlay lists show names only; the address is in the tooltip.
+- Dialogs share one spacing. The Reset dialog is solid and its "Type RESET"
+  field has room.
+- Every button presses the same way, and small controls are easier to hit.
+- Phones and narrow windows: quick-delay chips share one row; the catalog
+  header, starter cards and editor footer fit.
+- The "s" after the delay counter no longer reads as a capital S; the Twitch
+  format note lines up with its field; long catalog names take a second
+  line; the Frames stat fits on one line.
+- A profile name that is too long is explained in plain words, and Show me
+  offers the size instead of asking you to type it.
+
+### Spanish
+
+- A full sweep of the dashboard, Integrations, alerts and guides, with
+  consistent words: crasheo for an OBS crash, caída for a platform drop, en
+  directo for live.
+- OBS scene and source names and anything you typed are never translated.
+
+### Fixes
+
+- The Twitch stream key link opens your own Creator Dashboard instead of
+  Access denied (thanks **@mxgic1337** on GitHub).
+- The compact delay panel: an open Cut after card no longer slides under the
+  tabs, the saving line no longer stops mid-word, and the saving bar runs
+  along the whole card.
+- Streamlabs Desktop: a Twitch key that went in is confirmed in green, not
+  in the red of an error.
+- The built-in test server closes when the app is killed or crashes, so its
+  ports are free on the next start.
+- The alert editor no longer crashes on Undo or Discard after adding a level.
+- The help menu no longer holds on to memory each time it opens.
+- Ctrl+Z in the Studio no longer also undoes a delete on the page.
+- Guides: Back past skipped steps and closing a dialog mid-guide work.
+
+### Under the hood
+
+- The web code is split into feature folders, built from skeletons with
+  strict, tested rules; `web/README.md` explains where everything lives.
+- The build's minifier understands regex literals, which fixes one line of
+  the Integrations script it used to cut short.
+- A page test fails when a looping animation would run on the main thread.
+- ureq 3.5.1.
+
 ## [0.1.19] - Everything updates live, Spanish, and a clearer first run
 
 ### Every page updates by itself

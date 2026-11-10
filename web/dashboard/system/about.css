@@ -1,0 +1,77 @@
+/* Live system-info tiles in the About tab. Hairline-separated grid. */
+.sysinfo{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;margin-top:16px;
+  background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.sysinfo .si{background:var(--surface-2);padding:10px 12px;min-width:0}
+.sysinfo .si .k{display:block;font-size:10.5px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.5px}
+.sysinfo .si .v{display:block;font-size:14px;color:var(--fg);font-weight:600;margin-top:4px;
+  font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Version-aware requirement callout (VOD unlocker section). `.req` = a hard
+   requirement (OBS 32.2+ must use the script), `.info` = softer guidance. */
+.sys-callout{margin-top:12px;padding:10px 13px;border-radius:9px;font-size:12.5px;
+  line-height:1.5;border:1px solid var(--line);display:flex;gap:9px;align-items:flex-start}
+.sys-callout .sys-callout-ic{flex:0 0 auto;font-size:14px;line-height:1.35}
+.sys-callout.req{border-color:color-mix(in oklch,var(--warn,#d6a23a) 45%,var(--line));
+  background:color-mix(in oklch,var(--warn,#d6a23a) 12%,transparent)}
+.sys-callout.req .sys-callout-ic{color:var(--warn,#d6a23a)}
+.sys-callout.info{border-color:color-mix(in oklch,var(--accent) 32%,var(--line));
+  background:color-mix(in oklch,var(--accent) 8%,transparent)}
+.sys-callout.info .sys-callout-ic{color:var(--accent)}
+/* Links inside the About status messages need explicit contrast: they */
+/* sit inside .muted, which would otherwise mute them into the body copy. */
+#sys-about-msg a,
+.sys-about-card a:not(.ic-btn){color:var(--accent);text-decoration:none;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 35%,transparent);
+  font-weight:600;transition:color .15s,border-color .15s,background .15s;
+  padding:0 2px;border-radius:3px}
+#sys-about-msg a:hover,
+.sys-about-card a:not(.ic-btn):hover{color:#fff;
+  background:color-mix(in oklch,var(--accent) 18%,transparent);
+  border-bottom-color:var(--accent)}
+#sys-about-msg a:visited,
+.sys-about-card a:not(.ic-btn):visited{color:var(--accent)}
+/* What an available update brings: one line per change, its kind first
+   as a badge (Added cyan, Fixed green, Faster amber). */
+.sys-about-changes{margin-top:14px}
+.sys-about-changes ul{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:7px;font-size:12.5px;line-height:1.45;color:var(--fg-2)}
+.sys-about-changes li{display:flex;gap:10px;align-items:flex-start;min-width:0}
+.sys-about-changes li b{flex:none;min-width:56px;margin-top:1px;padding:1px 0;border-radius:99px;text-align:center;
+  font-size:9.5px;font-weight:650;line-height:1.5;text-transform:uppercase;letter-spacing:.5px;
+  color:var(--accent);background:color-mix(in oklch,var(--accent) 14%,transparent)}
+.sys-about-changes li b[data-kind="Fixed"]{color:var(--ok);background:color-mix(in oklch,var(--ok) 14%,transparent)}
+.sys-about-changes li b[data-kind="Faster"]{color:var(--warn);background:color-mix(in oklch,var(--warn) 14%,transparent)}
+/* The update itself: a quiet panel under the version row. */
+.upd-panel{margin-top:12px;padding:12px 14px 13px;border:1px solid var(--line);border-radius:10px;
+  background:color-mix(in oklch,var(--accent) 4%,var(--surface-2))}
+.upd-panel-title{font-size:10.5px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--fg-3)}
+.sys-about-msg{font-size:12px;line-height:1.5;margin-top:10px}
+.sys-about-msg:empty{display:none}
+/* Update settings: title over a one-line note, like the other System
+   settings; the tray one hangs under the check it depends on. */
+.upd-opts{display:grid;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.upd-opt{display:flex;align-items:flex-start;gap:10px;cursor:pointer;transition:opacity .2s var(--ease-out)}
+.upd-opt[hidden]{display:none}
+.upd-opt-t{display:block;font-weight:600;color:var(--fg)}
+.upd-opt-s{display:block;margin-top:1px;font-size:12px;color:var(--fg-3)}
+.upd-opt-sub{margin-left:26px}
+/* "Updated to vX": once after an update (in-app or by hand), until "Got it". */
+.whats-new{border-color:color-mix(in oklch,var(--accent) 32%,var(--line));
+  background:color-mix(in oklch,var(--accent) 6%,var(--bg-2))}
+.whats-new-head{display:flex;gap:12px;align-items:flex-start}
+.whats-new-ic{flex:none;width:22px;height:22px;margin-top:1px;border-radius:99px;display:inline-flex;
+  align-items:center;justify-content:center;font-size:12px;font-weight:700;
+  background:color-mix(in oklch,var(--accent) 20%,transparent);color:var(--accent)}
+.whats-new-text{flex:1;min-width:0}
+.whats-new-title{font-size:14px;font-weight:600;color:var(--fg)}
+.whats-new-sub{font-size:12.5px;line-height:1.5;color:var(--fg-2);margin-top:2px}
+.whats-new-ok{flex:none;padding:6px 12px;font-size:12.5px}
+.whats-new .sys-about-changes{margin:10px 0 0 34px}
+.whats-new-link{display:inline-block;margin:10px 0 0 34px;font-size:12.5px;font-weight:600;
+  color:var(--accent);text-decoration:none}
+.whats-new-link:hover{text-decoration:underline}
+.whats-new-link:focus-visible,.whats-new-ok:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* Restart / update progress in the toast rail: stays put until the page
+   reloads, so it is seen on whatever tab the user is on. */
+#restart-notice{max-width:min(420px,calc(100vw - 48px));line-height:1.45}
+#restart-notice .ic-toast-icon{flex:none}
+#restart-notice a{color:var(--accent);font-weight:600;word-break:break-all}
+

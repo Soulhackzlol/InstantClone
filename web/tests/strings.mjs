@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readWebFile, sourceOf } from './web-files.mjs';
 
 const WEB = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const REPO = path.dirname(WEB);
@@ -232,27 +233,27 @@ export function pageStrings() {
     if (text && !seen.has(text) && readsAsWords(text, inMarkup)) seen.set(text, where);
   };
   for (const file of PAGES) {
-    const src = fs.readFileSync(path.join(WEB, file), 'utf8').replace(/\r\n/g, '\n');
+    const src = readWebFile(file).replace(/\r\n/g, '\n');
     const literals = [];
     if (file.endsWith('.html')) {
       const markup = visibleMarkup(src).replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gi, (whole, code, at) => {
         literals.push(...jsLiterals(code, countLines(src, 0, at) + 1));
         return blankOut(whole);
       });
-      for (const { word, at } of markupWords(markup)) add(word, `${file}:${countLines(markup, 0, at) + 1}`, true);
+      for (const { word, at } of markupWords(markup)) add(word, sourceOf(file, countLines(markup, 0, at) + 1), true);
     } else {
       literals.push(...jsLiterals(src));
     }
     for (const { text, line } of literals) {
-      if (/<[a-zA-Z/]/.test(text)) markupWords(text).forEach(found => add(found.word, `${file}:${line}`, true));
-      else add(edgeless(normalize(decodeEntities(text))), `${file}:${line}`, false);
+      if (/<[a-zA-Z/]/.test(text)) markupWords(text).forEach(found => add(found.word, sourceOf(file, line), true));
+      else add(edgeless(normalize(decodeEntities(text))), sourceOf(file, line), false);
     }
   }
   for (const [file, pattern] of RUST_SHOWN) {
     const src = fs.readFileSync(path.join(REPO, file), 'utf8');
     for (const found of src.matchAll(pattern)) add(found[1].replace(/\\(.)/g, '$1'), file, true);
   }
-  for (const file of rustFiles()) {
+  for (const file of rustFiles().filter(file => !BUILD_ONLY.includes(path.relative(REPO, file).split(path.sep).join('/')))) {
     const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('#[cfg(test)]')[0];
     for (const pattern of RUST_MESSAGES) {
       for (const found of src.matchAll(pattern)) add(rustText(found[1]), path.relative(REPO, file), true);
@@ -272,6 +273,9 @@ const RUST_SHOWN = [
   ['src/integrations/event.rs', /EventKind::\w+ => "([A-Z][^"]*)"/g],
   ['src/instance_lock.rs', /\("([A-Z][a-z]+)", \[0x/g],
 ];
+
+/** Rust sources that only run while building (build.rs uses them): their errors never reach a page. */
+const BUILD_ONLY = ['src/pieced.rs'];
 
 /** What the app answers the pages in words: an error field, a refusal, a sentence. */
 const RUST_LITERAL = '"((?:[^"\\\\]|\\\\[\\s\\S])+)"';
@@ -301,11 +305,51 @@ export function rustStrings() {
   const found = [];
   for (const file of rustFiles()) {
     const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
-    for (const m of src.matchAll(/r##"([\s\S]*?)"##|r#"([\s\S]*?)"#|"((?:[^"\\]|\\[\s\S])*)"/g)) {
-      found.push(rustText(m[1] ?? m[2] ?? m[3]));
+    for (const literal of rustLiterals(src)) {
+      found.push(rustText(literal));
+      // A preset's text as it is saved, {user} and all, line by line: the
+      // dashboard puts it in the page's language when it is added.
+      const saved = literal.replace(/\\(n|"|\\)/g, (_, c) => (c === 'n' ? '\n' : c));
+      if (/\{[a-z]/.test(saved)) found.push(...saved.split('\n').map(normalize));
     }
   }
   return found;
+}
+
+/** A Rust file's string literals, raw ones too. A quote in a comment ("an
+ * unescaped \" here") or a char literal ('"') would pair the quotes wrongly
+ * for the rest of the file, so this reads it in order and skips both. */
+function rustLiterals(src) {
+  const out = [];
+  const CHAR = /^b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)|[^'\\\n])'/;
+  let i = 0;
+  while (i < src.length) {
+    const rest = src.slice(i, i + 12);
+    if (rest.startsWith('//')) { i = src.indexOf('\n', i); if (i < 0) break; continue; }
+    if (rest.startsWith('/*')) { const end = src.indexOf('*/', i + 2); i = end < 0 ? src.length : end + 2; continue; }
+    const raw = /^b?r(#*)"/.exec(rest);
+    if (raw && !/[A-Za-z0-9_]/.test(src[i - 1] || '')) {
+      const close = '"' + raw[1];
+      const start = i + raw[0].length, end = src.indexOf(close, start);
+      out.push(src.slice(start, end < 0 ? src.length : end));
+      i = end < 0 ? src.length : end + close.length;
+      continue;
+    }
+    if (src[i] === '"') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== '"') j += src[j] === '\\' ? 2 : 1;
+      out.push(src.slice(i + 1, j));
+      i = j + 1;
+      continue;
+    }
+    if (src[i] === "'" || (src[i] === 'b' && src[i + 1] === "'")) {
+      const char = CHAR.exec(src.slice(i, i + 14));
+      i += char ? char[0].length : 1;   // otherwise a lifetime, like 'a
+      continue;
+    }
+    i++;
+  }
+  return out;
 }
 
 /** Page strings the dictionary lacks and that aren't marked to stay. */
@@ -319,7 +363,7 @@ export function stale(strings = readStrings()) {
   // words too ("anytime" shown as a value), and the overlay runtime's, which
   // show in the Studio's previews.
   const scripts = [...PAGES, 'overlay-runtime.js'].flatMap(file => {
-    const src = fs.readFileSync(path.join(WEB, file), 'utf8');
+    const src = readWebFile(file);
     const code = file.endsWith('.html') ? [...src.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]) : [src];
     // plural(n, 'step') says "steps" without the code spelling it.
     const plurals = [...src.matchAll(/plural\([^\n]*?'([^']+)'\)/g)].map(m => m[1] + 's');

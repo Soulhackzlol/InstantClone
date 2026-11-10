@@ -1,0 +1,10 @@
+  <!-- Save bar: sticks to the bottom of the window while there are unsaved
+       changes, so Save is never a long scroll away. -->
+  <div class="sys-foot" id="sys-foot" role="status" hidden>
+    <span class="sys-foot-state">Unsaved changes</span>
+    <span class="muted" id="s-msg"></span>
+    <button class="ic-btn" onclick="discardSettings()">Discard</button>
+    <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
+  </div>
+</section>
+

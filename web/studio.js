@@ -302,9 +302,13 @@ const Studio = (function(){
   const SAMPLE_ALERTS = [{title:'New follower', text:'Nat'}, {title:'Bits', text:'Nat cheered 500 bits', message:'That clutch was unreal, gg!'},
     {title:'New subscriber', text:'xX_TheLongestNameInChat_Xx subscribed for 27 months',
       message:'Been here since the very first stream and never missed one. The delay setup is wild and the overlays keep getting better, keep it up!'}];
+  // In the page's language: the overlay page itself has no translations.
+  const saidAlert = a => Object.assign({}, a, {title:tr(a.title), text:tr(a.text), message:a.message ? tr(a.message) : a.message});
+  // What a preview's alert layers show until an alert plays.
+  const PREVIEW_SAMPLE = () => saidAlert({title:'New follower', text:'Nat', message:'First time here, love the stream!'});
   let sampleTurn = 0;
   function postSampleAlert(frame){
-    const a = SAMPLE_ALERTS[sampleTurn++ % SAMPLE_ALERTS.length];
+    const a = saidAlert(SAMPLE_ALERTS[sampleTurn++ % SAMPLE_ALERTS.length]);
     measureAgain();
     if(frame && frame.contentWindow) frame.contentWindow.postMessage({__ic_alert:Object.assign({ms:ALERT_DEMO_MS}, a)}, '*');
   }
@@ -321,7 +325,7 @@ const Studio = (function(){
   const ALERT_REST_MS = 1600;
   function alertLoop(frame){
     let t = 0;
-    if(frame.contentWindow) frame.contentWindow.postMessage({__ic_sim:true, forceState:'idle', state:simFrame('idle', 0), noHide:true}, '*');
+    if(frame.contentWindow) frame.contentWindow.postMessage({__ic_sim:true, forceState:'idle', state:simFrame('idle', 0), noHide:true, sample:PREVIEW_SAMPLE()}, '*');
     const play = ()=>{ postSampleAlert(frame); t = setTimeout(play, ALERT_DEMO_MS + ALERT_REST_MS); };
     t = setTimeout(play, 300);
     return { stop(){ clearTimeout(t); } };
@@ -353,7 +357,7 @@ const Studio = (function(){
   function makeSim(iframe, mode, onTick, noHide, replayGap){
     let timer=0, firstPost=true, lastReplay=performance.now(); const t0=performance.now();
     const gap = replayGap||5000;
-    function post(st,p,forceReplay){ if(iframe && iframe.contentWindow) iframe.contentWindow.postMessage({__ic_sim:true,forceState:st,state:simFrame(st,p),noHide:!!noHide,replay:firstPost||!!forceReplay},'*'); firstPost=false; if(onTick) onTick(st,p); }
+    function post(st,p,forceReplay){ if(iframe && iframe.contentWindow) iframe.contentWindow.postMessage({__ic_sim:true,forceState:st,state:simFrame(st,p),noHide:!!noHide,replay:firstPost||!!forceReplay,sample:PREVIEW_SAMPLE()},'*'); firstPost=false; if(onTick) onTick(st,p); }
     function loop(){
       const total=LIFECYCLE.reduce((a,x)=>a+x[1],0);
       let el=(performance.now()-t0)%total, acc=0, ph='idle', p=0;
@@ -659,11 +663,12 @@ const Studio = (function(){
         tile.className='ovg-tile'; tile.dataset.gid=o.slug; tile.style.setProperty('--tc', k.color);
         const alerts = page==='alerts';
         tile.innerHTML=(alerts ? Integrations.designIcon(k.theme) : '<span class="ovg-tile-ic">'+stIcon(k.icon)+'</span>')+
-          '<span class="ovg-tile-txt"><span class="ovg-tile-name"></span><span class="ovg-tile-path'+(alerts?'':' mono')+'"></span></span>';
+          '<span class="ovg-tile-txt"><span class="ovg-tile-name"></span>'+(alerts?'<span class="ovg-tile-path"></span>':'')+'</span>';
         // A name someone typed stays as typed; the ready-made alert designs have Spanish.
         tile.querySelector('.ovg-tile-name').translate=alerts;
         tile.querySelector('.ovg-tile-name').textContent=o.name||o.slug;
-        tile.querySelector('.ovg-tile-path').textContent=alerts ? designNote(o, k) : '/overlay/'+o.slug+'.html';
+        if(alerts) tile.querySelector('.ovg-tile-path').textContent=designNote(o, k);
+        else tile.title='/overlay/'+o.slug+'.html';
         tile.onclick=()=>{ gpicked=true; selectGallery(o.slug); };
         c.appendChild(tile);
       });

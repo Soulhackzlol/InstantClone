@@ -1,0 +1,123 @@
+/* - Logs ------------------- */
+/* A calm, scannable tail: each line is a time of day, a source tag in its
+   own colour, and the message tinted by how it went. On a phone the time
+   and tag sit above the message, which gets the full width. */
+.logs-wrap{position:relative}
+.logs{--log-tw:8.5ch;background:#050608;border:1px solid var(--line);border-radius:12px;padding:6px;
+  font-family:var(--mono);font-size:12px;color:var(--fg-2);line-height:1.55;margin:0;
+  height:clamp(420px,calc(100vh - 330px),900px);overflow-y:auto;
+  scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+/* Beside a phone's width the pane card is fitted to the window and scrolls
+   on its own, and every tab gets all of it: switching tabs, or folding the
+   delay panel, never moves the card's bottom edge. The Logs tab fills it:
+   the console takes the room the filters leave, so it is the one thing that
+   scrolls. A fixed-height console in a scrolling card meant two scrollbars,
+   and the wheel over the console never reached the card. */
+@media (min-width:561px){
+  .pane-card{height:var(--pane-max,70vh)}
+  .tab-pane[data-pane="logs"]{height:100%;min-height:0}
+  .tab-pane[data-pane="logs"] .logs-wrap{flex:1;min-height:160px}
+  /* "No events yet" fills the same room; its 420 px floor overflowed a
+     shorter card and gave it a scrollbar. */
+  .tab-pane[data-pane="logs"] .logs,
+  .tab-pane[data-pane="logs"] .logs-empty{height:100%;min-height:0}
+}
+.logs[hidden]{display:none}
+.log-row{position:relative;display:grid;grid-template-columns:var(--log-tw) 104px minmax(0,1fr);gap:12px;align-items:baseline;
+  padding:3px 10px 3px 14px;border-radius:7px;transition:background .15s var(--ease-out)}
+.log-row[hidden]{display:none}
+.log-row:hover{background:rgba(255,255,255,.035)}
+.log-row{cursor:copy}
+.log-row.copied{animation:logCopied .9s var(--ease-out)}
+.log-row.copied::after{content:"Copied";position:absolute;right:10px;top:3px;font:600 10.5px/1.55 var(--sans);
+  color:var(--accent);animation:logCopiedTag .9s var(--ease-out) forwards}
+@keyframes logCopied{from{background:color-mix(in oklch,var(--accent) 16%,transparent)}}
+@keyframes logCopiedTag{0%{opacity:0;transform:translateY(2px)}15%,70%{opacity:1;transform:none}100%{opacity:0}}
+/* How it went: a dot at the start of the line. */
+.log-row::before{content:"";position:absolute;left:5px;top:calc(.775em + 3px);width:4px;height:4px;margin-top:-2px;
+  border-radius:50%;background:transparent}
+.log-row.lvl-err::before{background:var(--err);box-shadow:0 0 0 3px color-mix(in oklch,var(--err) 22%,transparent)}
+.log-row.lvl-warn::before{background:var(--warn)}
+.log-row.lvl-ok::before{background:var(--ok)}
+.log-t{color:var(--fg-4);font-variant-numeric:tabular-nums;white-space:nowrap}
+.log-src{--h:210;justify-self:start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10.5px;padding:1px 7px;border-radius:6px;
+  color:oklch(80% .09 var(--h));background:oklch(80% .09 var(--h) / .1);transition:opacity .2s var(--ease-out)}
+/* A run of lines from one source names it once. */
+.log-row.same-src .log-src{opacity:0}
+.log-row.same-src:hover .log-src{opacity:.6}
+.log-msg{white-space:pre-wrap;overflow-wrap:anywhere}
+.log-msg mark{background:color-mix(in oklch,var(--accent) 30%,transparent);color:var(--fg);border-radius:3px;padding:0 1px}
+.log-row.lvl-err{background:color-mix(in oklch,var(--err) 7%,transparent)}
+.log-row.lvl-err .log-msg{color:color-mix(in oklch,var(--err) 70%,var(--fg))}
+.log-row.lvl-warn .log-msg{color:color-mix(in oklch,var(--warn) 85%,var(--fg))}
+.log-row.lvl-ok .log-msg{color:color-mix(in oklch,var(--ok) 45%,var(--fg))}
+/* Lines that arrive while you watch ease in; a problem flashes once. */
+/* Lines that come in together ease in one after another: --log-delay. */
+.log-row.log-new{animation:logIn .32s var(--ease-out) var(--log-delay,0ms) both}
+.log-row.lvl-err{--flash:var(--err)}
+.log-row.lvl-warn{--flash:var(--warn)}
+.log-row.log-new.lvl-err,.log-row.log-new.lvl-warn{animation:logIn .32s var(--ease-out) var(--log-delay,0ms) both,
+  logFlash 1.6s var(--ease-out) var(--log-delay,0ms)}
+@keyframes logIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@keyframes logFlash{from{background:color-mix(in oklch,var(--flash) 24%,transparent)}}
+.logs-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;animation:softDrop .25s var(--ease-out)}
+.logs-tools[hidden]{display:none}
+.logs-chips{display:inline-flex;gap:4px;padding:3px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line)}
+.logs-chip{appearance:none;display:inline-flex;align-items:center;gap:6px;border:0;border-radius:7px;padding:6px 11px;
+  background:transparent;color:var(--fg-3);font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+  transition:background .18s var(--ease-out),color .18s var(--ease-out),transform .12s var(--ease-out)}
+.logs-chip:hover{color:var(--fg)}
+.logs-chip:active{transform:scale(.96)}
+.logs-chip[aria-pressed="true"]{background:var(--surface-3);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.logs-n{font:600 10.5px/1 var(--mono);padding:2px 5px;border-radius:999px}
+.logs-n:empty{display:none}
+.logs-chip.lvl-warn .logs-n{background:color-mix(in oklch,var(--warn) 20%,transparent);color:var(--warn)}
+.logs-chip.lvl-err .logs-n{background:color-mix(in oklch,var(--err) 20%,transparent);color:var(--err)}
+.logs-source{width:auto;max-width:190px;height:36px;padding:0 10px}
+.logs-search{flex:1;min-width:160px;height:36px}
+.logs-copy{height:36px;padding:0 12px;font-size:12px;animation:softRise .2s var(--ease-out)}
+.logs-copy[hidden]{display:none}
+.logs-nomatch{position:absolute;inset:0;display:grid;place-items:center;color:var(--fg-3);font-size:13px;pointer-events:none;
+  animation:softRise .2s var(--ease-out)}
+.logs-nomatch[hidden]{display:none}
+.logs-latest{position:absolute;left:50%;bottom:14px;translate:-50% 0;appearance:none;border:1px solid var(--line-2);border-radius:999px;
+  padding:7px 14px;background:color-mix(in oklch,var(--surface-3) 88%,transparent);backdrop-filter:blur(10px);
+  color:var(--fg);font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+  box-shadow:0 8px 24px rgba(0,0,0,.45);animation:softRise .2s var(--ease-out);transition:transform .15s var(--ease-out)}
+.logs-latest:hover{border-color:color-mix(in oklch,var(--accent) 50%,var(--line-2))}
+.logs-latest:active{transform:scale(.96)}
+.logs-latest[hidden]{display:none}
+@media (max-width:640px){
+  .logs{height:calc(100dvh - 300px);min-height:320px;font-size:11.5px;padding:4px}
+  .log-row{grid-template-columns:auto minmax(0,1fr);gap:2px 8px;padding:6px 8px 6px 14px}
+  .log-row::before{top:calc(.775em + 6px)}
+  .log-msg{grid-column:1 / -1}
+  .log-row.same-src .log-src{opacity:.45}
+  .logs-chips{order:-1;flex:1 1 100%;overflow-x:auto;scrollbar-width:none}
+  .logs-chip{flex:1;justify-content:center}
+  .logs-source{flex:0 1 40%;max-width:none}
+  .logs-search{min-width:0}
+}
+@media (prefers-reduced-motion:reduce){
+  .log-row.log-new,.log-row.log-new.lvl-err,.log-row.log-new.lvl-warn{animation:none}
+}
+.logs-empty{background:var(--bg-2);border:1px dashed var(--line);border-radius:10px;
+  min-height:420px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:8px;text-align:center;padding:24px;color:var(--fg-3)}
+.logs-empty[hidden]{display:none}
+.logs-empty-icon{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;margin-bottom:6px;
+  background:var(--surface-3);color:var(--fg-3)}
+.logs-empty-icon svg{width:22px;height:22px}
+.logs-empty-title{font-size:14px;font-weight:600;color:var(--fg-2)}
+.logs-empty-body{font-size:12.5px;max-width:42ch;line-height:1.5}
+
+/* Footer */
+.ic-foot{margin-top:4px;display:flex;align-items:center;gap:10px;color:var(--fg-4);font-size:11.5px;
+  flex-wrap:wrap}
+.ic-foot .ic-brand-dot{margin:0 4px 2px}
+
+/* SVG defs (sparkline gradient) */
+.spark-fill{fill:url(#sparkGrad)}
+.spark-line{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+

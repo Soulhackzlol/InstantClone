@@ -38,9 +38,11 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Longest single wait a step may ask for.
 const MAX_WAIT: Duration = Duration::from_secs(3600);
-/// Longest wait a value from a template (chat, a web call) can ask for: a
-/// viewer typing a huge number must not hold the integration for an hour.
-const MAX_FILLED_WAIT: Duration = Duration::from_secs(60);
+/// Longest wait a value from a template (chat, a web call, an event) can
+/// ask for: a viewer typing a huge number must not hold the integration for
+/// an hour. Three minutes is Twitch's longest ad break, so a wait can last
+/// one ("{seconds}" of an ad, in milliseconds).
+const MAX_FILLED_WAIT: Duration = Duration::from_secs(180);
 /// Discord messages remembered for editing. Keys can come from chat, so
 /// they are capped; past this, new ones simply post a new message.
 const MAX_REMEMBERED_MESSAGES: usize = 500;
@@ -3008,6 +3010,9 @@ mod tests {
         assert_eq!(wait_cap(&step, "ms"), MAX_FILLED_WAIT);
         let fixed = Step::new(StepKind::Wait, &[("ms", "120000")]);
         assert_eq!(wait_cap(&fixed, "ms"), MAX_WAIT);
+        // Short, but long enough for the "Ad break notice" to wait out
+        // Twitch's longest ad (3 minutes) before saying "back".
+        assert!(MAX_FILLED_WAIT >= Duration::from_secs(180));
     }
 
     #[test]

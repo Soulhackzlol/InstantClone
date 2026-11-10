@@ -1,0 +1,101 @@
+  <!-- About sub-pane -->
+  <div class="sub-pane" data-subpane="about" hidden>
+    <section class="sys-section whats-new" id="whats-new" hidden aria-labelledby="whats-new-title">
+      <div class="whats-new-head">
+        <span class="whats-new-ic" aria-hidden="true">✓</span>
+        <div class="whats-new-text">
+          <div class="whats-new-title" id="whats-new-title">Updated</div>
+          <div class="whats-new-sub" id="whats-new-sub"></div>
+        </div>
+        <button class="ic-btn ic-btn-ghost whats-new-ok" onclick="dismissWhatsNew()">Got it</button>
+      </div>
+      <div class="sys-about-changes" id="whats-new-changes" hidden><ul id="whats-new-list"></ul></div>
+      <a class="whats-new-link" id="whats-new-link" href="#" target="_blank" rel="noreferrer">Release notes</a>
+    </section>
+    <section class="sys-section" data-title="Version and updates" data-find="version update updates check new release">
+      <div class="ic-label">InstantClone</div>
+      <div class="sys-version-row">
+        <span class="sys-version-num" id="sys-about-version">v?.?.?</span>
+        <span class="sys-os-chip" id="sys-os-chip" hidden></span>
+        <span class="sys-version-pill ok" id="sys-about-pill" hidden>up to date</span>
+        <button class="ic-btn ic-btn-ghost" id="sys-about-check-btn" onclick="aboutCheckUpdate()">Check for updates</button>
+        <button class="ic-btn ic-btn-primary" id="sys-about-update-btn" onclick="applyUpdate()" hidden>Update now</button>
+      </div>
+      <div class="sysinfo">
+        <div class="si"><span class="k">Uptime</span><span class="v" id="si-uptime">-</span></div>
+        <div class="si"><span class="k">Memory</span><span class="v" id="si-mem">-</span></div>
+        <div class="si"><span class="k">CPU</span><span class="v" id="si-cpu">-</span></div>
+        <div class="si"><span class="k">Ingest</span><span class="v" id="si-ingest">-</span></div>
+        <div class="si"><span class="k">Dashboard</span><span class="v" id="si-web">-</span></div>
+        <div class="si"><span class="k">Buffer</span><span class="v" id="si-buffer">-</span></div>
+        <div class="si"><span class="k">Destinations</span><span class="v" id="si-dests">-</span></div>
+      </div>
+      <div class="muted sys-about-msg" id="sys-about-msg"></div>
+      <div class="sys-about-changes upd-panel" id="sys-about-changes" hidden>
+        <div class="upd-panel-title" id="sys-about-changes-title">What it brings</div>
+        <ul id="sys-about-changes-list"></ul>
+      </div>
+      <div class="upd-opts">
+        <label class="upd-opt">
+          <input id="s-update-check" type="checkbox" onchange="syncUpdateTray()">
+          <span><span class="upd-opt-t">Check for updates automatically</span><span class="upd-opt-s">At start and once a day, from GitHub.</span></span>
+        </label>
+        <label class="upd-opt upd-opt-sub" id="s-update-tray-row" hidden>
+          <input id="s-update-tray" type="checkbox">
+          <span><span class="upd-opt-t">Tell me in the tray</span><span class="upd-opt-s">A quiet notification, once per update.</span></span>
+        </label>
+      </div>
+    </section>
+    <section class="sys-section">
+      <div class="ic-label">Application</div>
+      <div class="tab-sub">Restart to start using a new buffer size or file. Quit stops every destination cleanly and takes the dashboard offline until you launch the app again.</div>
+      <div class="row" style="gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap">
+        <button class="ic-btn ic-btn-ghost" onclick="restartApp(this)">Restart InstantClone</button>
+        <button class="ic-btn ic-btn-warn" onclick="quitApp(this)">Quit InstantClone</button>
+      </div>
+    </section>
+    <div class="sys-about-grid">
+      <div class="sys-about-card">
+        <div class="ic-label">Project</div>
+        <div class="tab-sub" style="margin-top:6px">Source, issue tracker, and release notes on GitHub.</div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          <a class="ic-btn ic-btn-ghost" href="https://github.com/Soulhackzlol/InstantClone" target="_blank" rel="noreferrer">Open on GitHub</a>
+          <a class="ic-btn ic-btn-ghost" href="https://github.com/Soulhackzlol/InstantClone/issues/new/choose" target="_blank" rel="noreferrer">Report an issue</a>
+        </div>
+      </div>
+      <div class="sys-about-card">
+        <div class="ic-label">License</div>
+        <div class="tab-sub" style="margin-top:6px">InstantClone is free software under the GPL-3.0 License.</div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          <a class="ic-btn ic-btn-ghost" href="https://github.com/Soulhackzlol/InstantClone/blob/main/LICENSE" target="_blank" rel="noreferrer">View license</a>
+        </div>
+      </div>
+    </div>
+    <section class="sys-reset" id="sys-reset" data-find="reset danger zone factory defaults wipe">
+      <div class="sys-reset-head">
+        <div>
+          <div class="ic-label" style="color:var(--err)">Danger zone</div>
+          <div class="tab-sub">Restore InstantClone to a clean state.</div>
+        </div>
+      </div>
+      <div class="sys-reset-grid">
+        <div class="sys-reset-card">
+          <div class="ic-label">Reset settings</div>
+          <div class="tab-sub">Ports, buffer, overlays folder, trace log, password and stream key, hotkeys, MIDI, crash protection and General options go back to defaults. Destinations, profiles and integrations are kept.</div>
+          <button class="ic-btn ic-btn-warn" onclick="openResetModal('settings')">Reset settings…</button>
+        </div>
+        <div class="sys-reset-card sys-reset-card-danger">
+          <div class="ic-label" style="color:var(--err)">Reset everything</div>
+          <div class="tab-sub">Also wipes destinations, profiles, integrations and your Discord, phone and Twitch connections. Then this page reloads into the setup wizard. <b>Cannot be undone.</b></div>
+          <button class="ic-btn ic-btn-danger" onclick="openResetModal('all')">Reset everything…</button>
+        </div>
+      </div>
+      <details class="ic-disclose" style="margin-top:10px">
+        <summary>What's not touched</summary>
+        <div class="ic-disclose-body">
+          <p>The buffer file on disk is kept (the next launch starts a fresh empty one anyway). InstantClone stays registered in OBS. Unregister from the <b>OBS</b> tab if you also want to remove it from OBS's Service dropdown.</p>
+        </div>
+      </details>
+    </section>
+  </div>
+

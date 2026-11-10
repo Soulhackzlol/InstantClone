@@ -1,0 +1,47 @@
+/* One input that grows + its action buttons, on a single line (wrapping only
+   when the row gets genuinely narrow). Used by the Security controls. */
+.sec-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sec-row .ic-input{flex:1 1 180px;min-width:0}
+.sys-version-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
+.sys-version-num{font-family:var(--mono);font-size:13px;color:var(--fg);font-weight:600}
+.sys-version-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:99px;
+  font-size:11px;font-weight:600;letter-spacing:.3px}
+.sys-version-pill.ok{background:color-mix(in oklch,var(--accent) 12%,transparent);color:var(--accent)}
+.sys-version-pill.new{background:color-mix(in oklch,var(--warn,#d6a23a) 18%,transparent);color:var(--warn,#d6a23a)}
+.sys-version-pill.ahead{background:color-mix(in oklch,#a18bff 18%,transparent);color:#a18bff}
+.sys-version-pill.err{background:color-mix(in oklch,var(--err) 14%,transparent);color:var(--err)}
+.sys-version-pill.off{background:color-mix(in oklch,var(--fg-3) 16%,transparent);color:var(--fg-3)}
+.sys-os-chip{display:inline-flex;align-items:center;padding:2px 9px;border-radius:99px;font-size:11px;
+  font-weight:600;letter-spacing:.3px;background:var(--surface-3);color:var(--fg-2);border:1px solid var(--line)}
+/* Secrets (dock token URL) blurred by default so they can't leak on a stream
+   or screen-share; the Show button reveals on demand. Copy still works blurred. */
+.blur-secret{filter:blur(6px);transition:filter .1s ease;user-select:none}
+.ic-input.blur-secret{transition:filter .1s ease,border-color .2s var(--ease-out),
+  background-color .2s var(--ease-out),box-shadow .25s var(--ease-out)}
+.blur-secret.revealed{filter:none;user-select:text}
+/* A blurred secret INPUT stays editable: unblur while focused (so typing is
+   never blurred) and while empty (so the placeholder is readable). It only
+   blurs a saved value sitting idle on screen. */
+.ic-input.blur-secret:focus,
+.ic-input.blur-secret:placeholder-shown{filter:none;user-select:text}
+/* Every checkbox is drawn as the dashboard's switch (a destination's
+   Enabled), so a setting looks and works the same wherever it is. Drawn
+   with backgrounds alone: no extra markup, and an input can't carry
+   pseudo-elements in every browser. Sized here, over inline sizes. */
+input[type="checkbox"]{appearance:none;-webkit-appearance:none;flex:none;box-sizing:border-box;
+  width:34px!important;height:20px!important;margin:0;vertical-align:middle;cursor:pointer;
+  border:1px solid var(--line-2);border-radius:999px;background-color:var(--surface-3);
+  background-image:radial-gradient(circle,var(--fg-3) 0 6px,transparent 6.5px);
+  background-repeat:no-repeat;background-size:18px 18px;background-position:0 50%;
+  transition:background-color .2s var(--ease-out),border-color .2s var(--ease-out),background-position .25s var(--ease-spring)}
+input[type="checkbox"]:checked{background-color:var(--accent);border-color:transparent;
+  background-image:radial-gradient(circle,#fff 0 6px,transparent 6.5px);background-position:14px 50%}
+input[type="checkbox"]:hover:not(:disabled){border-color:var(--fg-4)}
+input[type="checkbox"]:focus-visible{outline:2px solid color-mix(in oklch,var(--accent) 60%,transparent);outline-offset:2px}
+input[type="checkbox"]:disabled{opacity:.45;cursor:default}
+/* Fields side by side, wrapping on a narrow screen; checkboxes in a row. */
+.form-row{display:flex;gap:16px;margin-top:16px;align-items:flex-end;flex-wrap:wrap}
+.form-row.tight{gap:12px;margin-top:10px}
+.form-row>div,.form-row>label{display:flex;flex-direction:column;gap:6px;flex:1;min-width:180px}
+.checkbox-row{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px}
+.checkbox-row label{display:inline-flex;align-items:center;gap:8px;color:var(--fg-2);font-size:13px;cursor:pointer}

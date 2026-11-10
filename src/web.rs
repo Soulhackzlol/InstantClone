@@ -1237,7 +1237,7 @@ async fn route(
             ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
         }
         ("GET", "/obs/launch-status") => ("200 OK", "application/json", obs_launch_status_json()),
-        // Streamlabs Desktop (experimental): see `streamlabs`.
+        // Streamlabs Desktop: see `streamlabs`.
         ("GET", "/streamlabs/status") => (
             "200 OK",
             "application/json",
@@ -1253,6 +1253,13 @@ async fn route(
         }
         ("POST", "/streamlabs/import-twitch") => {
             import_streamlabs_twitch_key(ctrl, settings, cfg_path).await
+        }
+        // "Get my key from Twitch": see `twitch_key`.
+        ("POST", "/twitch-key/start") => start_twitch_key_login(settings).await,
+        ("POST", "/twitch-key/check") => check_twitch_key_login(ctrl, settings, cfg_path).await,
+        ("POST", "/twitch-key/cancel") => {
+            crate::twitch_key::cancel();
+            ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
         }
         ("GET", "/twitch_ingests") => ("200 OK", "application/json", twitch_ingests_json()),
         ("GET", "/profiles") => ("200 OK", "application/json", profiles_json(settings)),
@@ -1860,7 +1867,7 @@ fn platforms_json() -> String {
     // generator would just add indirection. JSON-safe at source - no
     // string here contains an unescaped " or \.
     r#"[
-  {"slug":"twitch","label":"Twitch","key_url":"https://dashboard.twitch.tv/u/_/settings/stream","key_help":"Twitch Creator Dashboard → Settings → Stream → Primary Stream Key","tip":"Twitch's transcoded quality ladder (1080p / 720p / 480p / 360p / 160p) is account-tier gated - non-Affiliates get Source-Only at any bitrate, Affiliate / Partner get the ladder. In Source-Only mode every viewer must decode your full source bitrate, and above ~8 Mbps mobile devices may fail (Error #1000 / black screen with audio). Stay ≤ 8 Mbps if your audience includes mobile and you're not sure your account gets transcoded."},
+  {"slug":"twitch","label":"Twitch","key_url":"https://dashboard.twitch.tv/settings/stream","key_help":"Twitch Creator Dashboard → Settings → Stream → Primary Stream Key","tip":"Twitch's transcoded quality ladder (1080p / 720p / 480p / 360p / 160p) is account-tier gated - non-Affiliates get Source-Only at any bitrate, Affiliate / Partner get the ladder. In Source-Only mode every viewer must decode your full source bitrate, and above ~8 Mbps mobile devices may fail (Error #1000 / black screen with audio). Stay ≤ 8 Mbps if your audience includes mobile and you're not sure your account gets transcoded."},
   {"slug":"youtube","label":"YouTube Live","key_url":"https://studio.youtube.com/channel/UC/livestreaming","key_help":"YouTube Studio → Go live → Stream tab → Stream key","tip":"First-time live: YouTube requires a 24h verification window after enabling live streaming."},
   {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream - copy BOTH the Server URL and the Stream key","tip":"Kick gives you a Server URL and a Stream key in Settings → Stream - paste both (the Server is per-streamer, so there is no single URL to hardcode). Kick takes streams over RTMPS (TLS on :443); InstantClone connects over it automatically. What Kick enforces: H.264, CBR, keyframe interval 2 s, bitrate ≤ 8000 kbps, up to 60 fps. B-frames: contrary to a lot of older guides, Kick's normal stream server accepts them - the strict no-B-frames rule is AWS IVS real-time/WHIP, which Kick doesn't use for OBS streaming, so you usually don't need to change anything. If Kick ever rejects your stream, set B-frames to 0 in OBS (Output → Advanced); that's safe for Twitch/YouTube too. InstantClone passes on one encode without re-encoding, so B-frames can't be stripped for Kick alone. And with Twitch Enhanced Broadcasting on, Twitch chooses the encode settings (including B-frames) for you."},
   {"slug":"trovo","label":"Trovo","key_url":"https://studio.trovo.live/channel/myinfo","key_help":"Trovo Studio → Channel → My Info → Stream Key","tip":null},
@@ -3534,6 +3541,11 @@ fn obs_installs_json(settings: &Arc<watch::Sender<Settings>>) -> String {
                 ),
                 ("state", json::str(registration.as_str())),
                 ("other_port", other_port),
+                // Its profile streams to InstantClone: nothing left to pick.
+                (
+                    "selected",
+                    Value::Bool(obs_register::service_selected_in(&install.config_dir)),
+                ),
             ])
         })
         .collect();
@@ -3575,11 +3587,19 @@ fn change_obs_registrations(
             r#"{"ok":false,"error":"Pick at least one OBS."}"#.into(),
         );
     }
-    let (web_port, ingest_port) = {
+    // The key OBS sends: the InstantClone stream key when one is set
+    // (System > Access), else any word.
+    let (web_port, ingest_port, obs_key) = {
         let s = settings.borrow();
-        (s.web_port, s.ingest_port)
+        let key = if s.ingest_key.is_empty() {
+            "main".to_string()
+        } else {
+            s.ingest_key.clone()
+        };
+        (s.web_port, s.ingest_port, key)
     };
     let mut problems = Vec::new();
+    let mut pointed = 0;
     for install in chosen {
         let name = if install.portable {
             format!(
@@ -3600,9 +3620,16 @@ fn change_obs_registrations(
             ))
         } else if register {
             obs_register::register_in(&path, web_port, ingest_port)
+                .and_then(|()| {
+                    obs_register::select_service_in(&install.config_dir, ingest_port, &obs_key)
+                })
+                .map(|switched| pointed += usize::from(switched))
                 .map_err(|e| format!("{name}: {e}"))
         } else {
-            obs_register::unregister_in(&path).map_err(|e| format!("{name}: {e}"))
+            obs_register::unregister_in(&path)
+                .and_then(|()| obs_register::restore_service_in(&install.config_dir))
+                .map(|back| pointed += back)
+                .map_err(|e| format!("{name}: {e}"))
         };
         if let Err(problem) = done {
             problems.push(problem);
@@ -3618,8 +3645,12 @@ fn change_obs_registrations(
             ),
         );
     }
-    let message = if register {
+    let message = if register && pointed > 0 {
+        "Registered, and OBS now streams to InstantClone, key included. Open OBS and press Start Streaming."
+    } else if register {
         "Registered. Open OBS and pick InstantClone in Settings → Stream → Service."
+    } else if pointed > 0 {
+        "Unregistered. OBS no longer lists InstantClone and streams with your old settings again."
     } else {
         "Unregistered. OBS no longer lists InstantClone."
     };
@@ -4312,45 +4343,129 @@ async fn import_streamlabs_twitch_key(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
-    let key = match crate::streamlabs::twitch_stream_key().await {
-        Ok(key) => key,
-        Err(e) => {
-            return (
-                "409 Conflict",
+    match crate::streamlabs::twitch_stream_key().await {
+        Ok(key) => match save_twitch_key(ctrl, settings, cfg_path, key, "Streamlabs") {
+            Ok(import) => (
+                "200 OK",
                 "application/json",
-                format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
-            )
+                key_import_json(&import, "", false),
+            ),
+            Err(e) => error_answer("500 Internal Server Error", &e),
+        },
+        Err(e) => error_answer("409 Conflict", &e),
+    }
+}
+
+/// Start the one-time Twitch login that reads the stream key.
+async fn start_twitch_key_login(
+    settings: &Arc<watch::Sender<Settings>>,
+) -> (&'static str, &'static str, String) {
+    let client_id =
+        crate::integrations::twitch::effective_client_id(&settings.borrow().twitch_client_id);
+    let started = tokio::task::spawn_blocking(move || crate::twitch_key::start(&client_id))
+        .await
+        .unwrap_or_else(|_| Err("InstantClone couldn't ask Twitch.".into()));
+    match started {
+        Ok(code) => (
+            "200 OK",
+            "application/json",
+            format!(
+                r#"{{"ok":true,"user_code":"{}","uri":"{}","expires_in":{}}}"#,
+                json_escape(&code.user_code),
+                json_escape(&code.uri),
+                code.expires_in
+            ),
+        ),
+        Err(e) => error_answer("409 Conflict", &e),
+    }
+}
+
+/// Whether the streamer approved on Twitch yet; on approval the key goes
+/// straight into the Twitch destination, never through the page.
+async fn check_twitch_key_login(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    use crate::twitch_key::Check;
+    let checked = tokio::task::spawn_blocking(crate::twitch_key::check)
+        .await
+        .unwrap_or_else(|_| Check::Ended("InstantClone couldn't ask Twitch.".into()));
+    match checked {
+        Check::Waiting => (
+            "200 OK",
+            "application/json",
+            r#"{"ok":true,"state":"waiting"}"#.to_string(),
+        ),
+        Check::Ended(why) => error_answer("409 Conflict", &why),
+        Check::Done { key, signed_in } => {
+            // The same approval connects Twitch in Integrations, unless an
+            // account is connected there already: then it goes back.
+            let kept = ctrl.integrations().is_some_and(|i| {
+                i.twitch
+                    .adopt_main(&signed_in.client_id, &signed_in.tokens, &signed_in.who)
+            });
+            let login = signed_in.who.login.clone();
+            if kept {
+                ctrl.log(format!("[Twitch] {login} connected for Integrations too"));
+            } else {
+                tokio::task::spawn_blocking(move || signed_in.revoke());
+            }
+            match save_twitch_key(ctrl, settings, cfg_path, key, "Twitch") {
+                Ok(import) => (
+                    "200 OK",
+                    "application/json",
+                    key_import_json(&import, &login, kept),
+                ),
+                Err(e) => error_answer("500 Internal Server Error", &e),
+            }
         }
-    };
+    }
+}
+
+fn error_answer(status: &'static str, why: &str) -> (&'static str, &'static str, String) {
+    (
+        status,
+        "application/json",
+        format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(why)),
+    )
+}
+
+/// `integrations`: the login that read the key stays, for Integrations.
+fn key_import_json(import: &KeyImport, login: &str, integrations: bool) -> String {
+    format!(
+        r#"{{"ok":true,"state":"done","destination":"{}","outcome":"{}","enabled":{},"login":"{}","integrations":{}}}"#,
+        json_escape(&import.name),
+        import.outcome,
+        import.enabled,
+        json_escape(login),
+        integrations
+    )
+}
+
+/// Put a Twitch key fetched from `from` (Streamlabs, Twitch) into the Twitch
+/// destination and save. The key itself is never logged or sent back.
+fn save_twitch_key(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+    key: String,
+    from: &str,
+) -> Result<KeyImport, String> {
     let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     let import = put_twitch_key(&mut ns, key);
-    let answer = format!(
-        r#"{{"ok":true,"destination":"{}","outcome":"{}","enabled":{}}}"#,
-        json_escape(&import.name),
-        import.outcome,
-        import.enabled
-    );
     if import.outcome == "unchanged" {
-        return ("200 OK", "application/json", answer);
+        return Ok(import);
     }
     if has_streamable_dest(&ns) {
         ns.configured = true;
     }
-    if let Err(e) = ns.save(cfg_path) {
-        return (
-            "500 Internal Server Error",
-            "application/json",
-            format!(
-                r#"{{"ok":false,"error":"{}"}}"#,
-                json_escape(&e.to_string())
-            ),
-        );
-    }
+    ns.save(cfg_path).map_err(|e| e.to_string())?;
     reconcile_obs_vod_files(&ns, ctrl);
     let _ = settings.send(ns);
     ctrl.log(format!(
-        "[Streamlabs] Twitch key {} destination '{}'",
+        "[{from}] Twitch key {} destination '{}'",
         if import.outcome == "added" {
             "put in a new"
         } else {
@@ -4358,7 +4473,7 @@ async fn import_streamlabs_twitch_key(
         },
         import.name
     ));
-    ("200 OK", "application/json", answer)
+    Ok(import)
 }
 
 /// What importing the Twitch key did, for the dashboard to say.
@@ -5993,11 +6108,13 @@ static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html
 /// build-time gzipped (see `build.rs`).
 static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"));
 
-/// Main dashboard / first-run wizard. Source lives in `web/index.html`;
-/// build-time minified + gzipped (see `build.rs`).
+/// Main dashboard / first-run wizard. Source lives in `web/dashboard/`
+/// (its skeleton `index.html` includes the pieces); build-time joined,
+/// minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
-/// The dashboard's Integrations tab; source in `web/integrations.js`,
-/// build-time gzipped like the dock script.
+/// The dashboard's Integrations tab; source in `web/integrations/`
+/// (its skeleton `integrations.js` includes the pieces), build-time
+/// gzipped like the dock script.
 static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
 /// The Overlay Studio editor; source in `web/studio.js`, gzipped the same way.
 static STUDIO_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js.gz"));
@@ -8709,6 +8826,9 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         ("POST", "/streamlabs/connect", Access::Admin),
         ("POST", "/streamlabs/disconnect", Access::Admin),
         ("POST", "/streamlabs/import-twitch", Access::Admin),
+        ("POST", "/twitch-key/start", Access::Admin),
+        ("POST", "/twitch-key/check", Access::Admin),
+        ("POST", "/twitch-key/cancel", Access::Admin),
         ("GET", "/twitch_ingests", Access::Admin),
         ("GET", "/profiles", Access::Control),
         ("GET", "/logs", Access::Admin),

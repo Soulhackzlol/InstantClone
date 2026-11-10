@@ -1,0 +1,270 @@
+/* - Spotlight tour ------------------─
+   Layout:
+     #tour      = full-screen layer (pointer-events: none so clicks
+                  fall through everywhere except the tooltip)
+     SVG mask   = dark overlay with a hole punched over the target
+     .tour-highlight = a thin accent border around the hole for emphasis
+     .tour-tooltip   = floating card next to the hole, click-to-navigate
+*/
+.tour{position:fixed;inset:0;z-index:300;pointer-events:none;
+  animation:fadeIn .2s var(--ease-out)}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.tour-backdrop-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:auto}
+.tour-highlight{position:absolute;border-radius:10px;
+  border:2px solid var(--accent);
+  box-shadow:0 0 0 1px rgba(255,255,255,.10) inset,0 0 24px var(--accent-glow);
+  pointer-events:none;
+  transition:left .35s var(--ease-spring),top .35s var(--ease-spring),
+             width .35s var(--ease-spring),height .35s var(--ease-spring),
+             opacity .25s;
+}
+.tour-highlight.hidden{opacity:0}
+
+.tour-tooltip{
+  position:absolute;
+  width:380px;max-width:calc(100vw - 32px);
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  border:1px solid var(--line-2);border-radius:14px;
+  box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px var(--accent-glow);
+  pointer-events:auto;
+  display:flex;flex-direction:column;
+  transition:left .35s var(--ease-spring),top .35s var(--ease-spring),
+             transform .25s var(--ease-out),opacity .25s;
+  animation:tipIn .35s var(--ease-spring) both;
+}
+@keyframes tipIn{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+.tour-arrow{position:absolute;width:14px;height:14px;
+  background:var(--surface-2);
+  border:1px solid var(--line-2);
+  pointer-events:none}
+.tour-tooltip[data-side="bottom"]{margin-top:14px}
+.tour-tooltip[data-side="bottom"] .tour-arrow{top:-8px;left:32px;
+  border-right:0;border-bottom:0;transform:rotate(45deg);
+  border-top-left-radius:3px}
+.tour-tooltip[data-side="top"]{margin-top:-14px}
+.tour-tooltip[data-side="top"] .tour-arrow{bottom:-8px;left:32px;
+  border-left:0;border-top:0;transform:rotate(45deg);
+  border-bottom-right-radius:3px}
+.tour-tooltip[data-side="left"]{margin-left:-14px}
+.tour-tooltip[data-side="left"] .tour-arrow{right:-8px;top:32px;
+  border-left:0;border-bottom:0;transform:rotate(45deg);
+  border-top-right-radius:3px}
+.tour-tooltip[data-side="right"]{margin-left:14px}
+.tour-tooltip[data-side="right"] .tour-arrow{left:-8px;top:32px;
+  border-right:0;border-top:0;transform:rotate(45deg);
+  border-bottom-left-radius:3px}
+/* Centered variant (welcome + wrap-up steps). Needs its own keyframe
+   because the default tipIn animation sets `transform: scale(...)` and
+   would override the `translate(-50%,-50%)` that does the centering -
+   the tooltip would render at the top-left of 50%/50% instead of the
+   middle. Composing both transforms in every keyframe keeps it locked
+   to centre throughout the entrance and after it finishes. Slightly
+   longer + softer than the sided animation because the welcome step is
+   the first thing the user sees and we want it to land gently. */
+.tour-tooltip[data-side="center"]{
+  transform:translate(-50%,-50%);
+  animation:tipInCenter .45s var(--ease-spring) both;
+}
+.tour-tooltip[data-side="center"] .tour-arrow{display:none}
+@keyframes tipInCenter{
+  from{transform:translate(-50%,calc(-50% + 14px)) scale(.94);opacity:0}
+  to  {transform:translate(-50%,-50%) scale(1);opacity:1}
+}
+
+.tour-head{display:flex;justify-content:space-between;align-items:flex-start;
+  padding:18px 20px 12px;border-bottom:1px solid var(--line)}
+.tour-step{font-size:10.5px;text-transform:uppercase;letter-spacing:1.4px;
+  color:var(--accent);font-weight:600;margin-bottom:4px}
+.tour-title{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.tour-body{padding:14px 20px 16px;color:var(--fg-2);font-size:13px;line-height:1.55;
+  max-height:40vh;overflow-y:auto}
+.tour-body p{margin:0 0 8px}
+.tour-body p:last-child{margin-bottom:0}
+.tour-body b{color:var(--fg)}
+.tour-body code{background:var(--bg-2);border:1px solid var(--line);
+  padding:1px 6px;border-radius:5px;font-family:var(--mono);font-size:12px}
+.tour-body ul{margin:6px 0 8px 16px;padding:0}
+.tour-body li{margin:3px 0}
+/* Not scoped to .tour-body: the wizard reuses the same accent callout
+   for the "cut after this airs" teaser, so both stay in lockstep. */
+.tour-tip{display:flex;align-items:flex-start;gap:8px;
+  padding:9px 11px;background:color-mix(in oklch,var(--accent) 5%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--accent) 25%,var(--line));
+  border-radius:8px;font-size:12px;margin-top:8px}
+.tour-tip strong{color:var(--accent);margin-right:4px}
+.tour-foot{display:flex;align-items:center;gap:6px;padding:10px 16px;
+  border-top:1px solid var(--line);background:rgba(0,0,0,.15);
+  border-bottom-left-radius:14px;border-bottom-right-radius:14px}
+.tour-foot .ic-btn{padding:7px 12px;font-size:12px}
+.tour-foot .ic-btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* First-run "New here?" pulse around the (?) button. Auto-dismisses
+   on first interaction OR after they've explicitly seen the tour. */
+/* The round header buttons: compact mode and help. */
+.hdr-round{position:relative;width:30px;height:30px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);
+  color:var(--fg-3);font-weight:700;font-size:14px}
+.hdr-round svg{width:15px;height:15px}
+#hdr-compact{transition:color .2s var(--ease-out),border-color .2s var(--ease-out),background .2s var(--ease-out),transform .15s var(--ease-out)}
+#hdr-compact:hover{color:var(--fg);border-color:var(--line-2)}
+#hdr-compact:active{transform:scale(.92)}
+#hdr-compact[aria-pressed="true"]{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 45%,transparent);
+  background:color-mix(in oklch,var(--accent) 12%,var(--surface-3))}
+/* Folding the panel up points the chevron up; folded, it points down. */
+.hdr-compact-chev{transform-box:fill-box;transform-origin:center;transition:rotate .35s var(--ease-out)}
+#hdr-compact[aria-pressed="true"] .hdr-compact-chev{rotate:180deg}
+#hdr-help{transition:transform .15s var(--ease-spring),background .15s,color .15s}
+#hdr-help:hover{background:var(--accent);color:var(--accent-ink);border-color:transparent;transform:scale(1.06)}
+.help-hint{
+  position:absolute;top:calc(100% + 8px);right:0;
+  background:var(--accent);color:var(--accent-ink);
+  padding:6px 11px;border-radius:8px;
+  font-size:11px;font-weight:600;white-space:nowrap;letter-spacing:.2px;
+  box-shadow:0 6px 16px var(--accent-glow);
+  pointer-events:none;
+  animation:helpHintPulse 2s ease-in-out infinite;
+}
+.help-hint::before{
+  content:'';position:absolute;top:-4px;right:14px;
+  width:8px;height:8px;background:var(--accent);
+  transform:rotate(45deg);
+}
+@keyframes helpHintPulse{
+  0%,100%{transform:translateY(0)}
+  50%{transform:translateY(-2px)}
+}
+
+/* utility */
+.muted{color:var(--fg-3);font-size:12.5px}
+.spacer{flex:1}
+[hidden]{display:none !important}
+
+/* Respect the OS "reduce motion" setting. The dashboard leans on several
+   always-running decorative loops - the aurora drift behind the hero, the
+   live-dot pulse rings, the arming shimmer - which are exactly the kind of
+   sustained movement that triggers vestibular discomfort. Kill those, and
+   collapse one-shot transitions/animations to near-instant so state still
+   changes visibly without sweeping. Last in the sheet so it wins on order;
+   the functional state machine is untouched - only the motion is. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.001ms !important;
+    scroll-behavior:auto !important;
+  }
+}
+/* Reduced transparency: the glass surfaces stop leaning on blur and become
+   frosted/solid so text stays legible when the OS asks for it (Apple HIG). */
+@media (prefers-reduced-transparency: reduce){
+  .dcard-act{backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--surface-3)}
+  .dcard-act:hover{background:color-mix(in oklch,#fff 6%,var(--surface-3))}
+  .st-modal{background:rgba(4,6,10,.97);backdrop-filter:none}
+  .ic-modal-backdrop{background:rgba(0,0,0,.84);backdrop-filter:none}
+}
+/* Higher contrast: firm up the hairline borders and lift the faintest ink,
+   token-level so every bordered surface benefits from one change. */
+@media (prefers-contrast: more){
+  :root{--line:rgba(255,255,255,.24);--line-2:rgba(255,255,255,.40);--fg-4:oklch(0.63 0.018 230)}
+}
+/* ── Global hotkeys editor ─────────────────────────────────────────────
+   A capture field per action: click to record, press a modifier+key combo,
+   it commits and saves. Chips render the bound combo; the recording and
+   invalid states carry the whole affordance so no copy is needed. */
+.hk-list{margin-top:20px;display:flex;flex-direction:column;gap:18px}
+.hk-row{display:flex;align-items:center;gap:16px}
+.hk-row-main{flex:1;min-width:0}
+.hk-row-title{font-weight:600}
+.hk-row-sub{margin-top:2px}
+.hk-capture{
+  flex:0 0 auto;min-width:168px;min-height:38px;display:inline-flex;
+  align-items:center;justify-content:center;gap:7px;padding:7px 12px;
+  border:1px solid var(--line-2);border-radius:var(--radius-sm);
+  background:var(--surface-3,rgba(255,255,255,.04));color:var(--fg-2);
+  font:inherit;cursor:pointer;user-select:none;
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),
+    box-shadow .18s var(--ease-out),transform .12s var(--ease-spring);
+}
+.hk-capture:hover{border-color:var(--accent);color:var(--fg)}
+/* Feedback on the press itself, not on release - waiting for the click to
+   land is the difference between a control that answers and one that lags. */
+.hk-capture:active{transform:scale(.985)}
+.hk-capture:focus-visible{outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-glow)}
+/* A binding the OS refused: the field looks bound but nothing will ever
+   fire, so the row has to say so where the eye already is. */
+.hk-capture.conflict{border-color:var(--warn);
+  background:color-mix(in oklch,var(--warn) 8%,transparent)}
+.hk-flag{display:none;align-items:center;gap:5px;margin-top:3px;
+  color:var(--warn);font-size:12px;letter-spacing:.1px}
+.hk-flag.on{display:inline-flex}
+.hk-capture.recording{border-color:var(--accent);color:var(--fg);
+  background:color-mix(in oklch,var(--accent) 10%,transparent);
+  box-shadow:0 0 0 3px var(--accent-glow);animation:hk-pulse 1.4s var(--ease-out) infinite}
+.hk-capture.invalid{border-color:var(--danger);animation:hk-shake .32s var(--ease-out)}
+/* The binding that just fired, so a press that landed while you were in a
+   game is still visible when you alt-tab back. */
+.hk-capture.fired{animation:hk-fired .9s var(--ease-out)}
+.hk-capture.fired-bad{animation:hk-fired-bad .9s var(--ease-out)}
+.hk-capture.empty{color:var(--fg-4);font-size:13px}
+.hk-chip{display:inline-flex;align-items:center;justify-content:center;
+  min-width:22px;height:24px;padding:0 7px;border-radius:6px;
+  border:1px solid var(--line-2);border-bottom-width:2px;
+  background:color-mix(in oklch,#fff 7%,var(--surface-3,transparent));
+  color:var(--fg);font-family:var(--mono);
+  font-size:12px;font-weight:600;line-height:1;
+  animation:hk-chip-in .22s var(--ease-spring) both}
+.hk-sep{color:var(--fg-4);font-size:11px;font-weight:600}
+.hk-cue{color:var(--fg-3);font-size:12.5px;letter-spacing:.2px}
+.hk-clear{flex:0 0 auto;width:30px;height:30px;display:inline-flex;
+  align-items:center;justify-content:center;border:none;border-radius:8px;
+  background:transparent;color:var(--fg-4);cursor:pointer;font-size:17px;line-height:1;
+  transition:background .15s var(--ease-out),color .15s var(--ease-out),opacity .15s}
+.hk-clear:hover{background:color-mix(in oklch,var(--danger) 16%,transparent);color:var(--danger)}
+.hk-clear:active{transform:scale(.92)}
+/* Kept in the layout when there is nothing to clear: collapsing it shifted
+   every row sideways the moment a binding was set or cleared. */
+.hk-clear.idle{opacity:0;pointer-events:none}
+.hk-warn{margin-top:10px;color:var(--warn);font-size:12.5px;min-height:1.1em}
+.hk-note{margin-top:10px;color:var(--fg-3);font-size:12.5px}
+.hk-device{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+.hk-device label{font-weight:600;font-size:13.5px}
+.hk-device select{flex:1;min-width:180px;max-width:340px}
+@keyframes hk-pulse{0%,100%{box-shadow:0 0 0 3px var(--accent-glow)}
+  50%{box-shadow:0 0 0 5px var(--accent-glow)}}
+/* Chips arrive rather than blink in: the confirmation that a binding
+   committed is the motion, so no extra copy is needed to say "saved". */
+@keyframes hk-chip-in{from{opacity:0;transform:scale(.86)}
+  to{opacity:1;transform:scale(1)}}
+@keyframes hk-fired{
+  0%{box-shadow:0 0 0 0 var(--accent-glow);border-color:var(--accent)}
+  18%{box-shadow:0 0 0 6px var(--accent-glow);border-color:var(--accent)}
+  100%{box-shadow:0 0 0 0 transparent}}
+@keyframes hk-fired-bad{
+  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--warn) 45%,transparent);border-color:var(--warn)}
+  18%{box-shadow:0 0 0 6px color-mix(in oklch,var(--warn) 45%,transparent);border-color:var(--warn)}
+  100%{box-shadow:0 0 0 0 transparent}}
+@keyframes hk-shake{0%,100%{transform:translateX(0)}
+  20%{transform:translateX(-5px)}40%{transform:translateX(5px)}
+  60%{transform:translateX(-3px)}80%{transform:translateX(3px)}}
+@media (prefers-reduced-motion: reduce){
+  .hk-capture.recording{animation:none}
+  .hk-capture.invalid{animation:none}
+  .hk-capture.fired,.hk-capture.fired-bad{animation:none;border-color:var(--accent)}
+  .hk-capture:active{transform:none}
+  .hk-clear:active{transform:none}
+  .hk-chip{animation:none}
+}
+@media (max-width:560px){
+  .hk-row{flex-wrap:wrap;gap:8px}
+  .hk-capture{min-width:0;flex:1}
+}
+/* System > Twitch login app. */
+.tw-app-status{margin-top:10px;padding:8px 11px;border-radius:9px;font-size:12.5px;color:var(--fg-2);
+  background:var(--surface-3);border:1px solid var(--line)}
+.tw-app-status:empty{display:none}
+.tw-app-status.warn{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 35%,var(--line));
+  background:color-mix(in oklch,var(--warn) 8%,var(--surface-3))}
+.tw-app-steps{margin:12px 0 0;padding-left:20px;font-size:12.5px;line-height:1.75;color:var(--fg-2)}
+.tw-app-steps a,.tw-app-warn a{color:var(--accent)}
+.tw-app-copy{padding:2px 9px;font-size:11.5px;border-radius:7px;vertical-align:1px}
+.tw-app-warn{margin-top:10px}

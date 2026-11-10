@@ -1,0 +1,22 @@
+  <!-- Alerts & logs: where alerts went, and the wire trace -->
+  <div class="sub-pane" data-subpane="alerts" hidden>
+    <section class="sys-section" data-find="discord webhook notifications alerts ping phone push chat integrations">
+      <div class="ic-label">Alerts</div>
+      <div class="tab-sub">Discord, Twitch chat and phone alerts live in <b>Integrations</b> now, with a preview of every message.</div>
+      <div class="row" style="justify-content:flex-end;margin-top:10px">
+        <button class="ic-btn ic-btn-ghost" onclick="showTab('integrations')">Open Integrations</button>
+      </div>
+    </section>
+    <section class="sys-section" data-find="trace log debug diagnostics wire support">
+      <div class="ic-label">Trace log</div>
+      <div class="tab-sub">A detailed log of everything sent out, at <code class="mono">./instantclone-trace.log</code>. Useful when investigating an issue, safe to disable otherwise.</div>
+      <label style="display:flex;align-items:center;gap:10px;margin-top:10px;cursor:pointer">
+        <input id="s-trace" type="checkbox" style="width:16px;height:16px;cursor:pointer">
+        <span>Capture trace log when streaming</span>
+      </label>
+      <div class="row" style="margin-top:10px">
+        <button class="ic-btn ic-btn-ghost reveal-btn" onclick="reveal('trace')">Show log file in Explorer</button>
+      </div>
+    </section>
+  </div>
+

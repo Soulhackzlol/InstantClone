@@ -1,0 +1,55 @@
+/* - Tabs ------------------- */
+.tabs{display:flex;align-items:center;padding:4px;background:var(--surface);border:1px solid var(--line);
+  border-radius:10px;gap:2px;position:relative;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:7px;
+  padding:9px 14px;border-radius:7px;color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
+  position:relative;z-index:2;transition:color .2s var(--ease-out);white-space:nowrap;
+  flex:1;justify-content:center}
+@media (max-width:720px){.tab{flex:0 0 auto}}
+.tab:hover{color:var(--fg)}
+.tab.on{color:var(--fg)}
+.tab svg{opacity:.85;width:15px;height:15px;transition:color .2s var(--ease-out)}
+.tab.on svg{opacity:1;color:var(--accent)}
+/* Indicators slide without overshoot: a spring's overshoot grows with the
+   distance, and a long slide (Destinations to Logs) ran into the strip's end. */
+.tab-ind{position:absolute;top:4px;bottom:4px;background:var(--surface-3);border-radius:7px;
+  transition:left .28s var(--ease-out),width .28s var(--ease-out);z-index:1;border:1px solid var(--line-2)}
+
+/* - Sub-tabs (nested nav, currently used by System pane) -─ */
+.sub-tabs{position:relative;display:flex;gap:2px;padding:4px;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:9px;align-items:stretch;overflow-x:auto;scrollbar-width:none}
+.sub-tabs::-webkit-scrollbar{display:none}
+/* A pane's section strip (.section-tabs: System, Overlays, the OBS app
+   switch) stays in reach while its pane scrolls, 6px under the card's edge
+   (sticky counts from inside the card's padding). Segmented controls share
+   .sub-tabs but never stick. The halo in the card's colour hides what
+   scrolls past around it; once the pane has scrolled, a soft fade in the
+   same colour under the halo lets the content slide beneath instead of
+   being cut off at a hard edge (a dark shade can't show on these cards). */
+.pane-card .section-tabs{position:sticky;top:-26px;z-index:5;
+  box-shadow:0 0 0 10px var(--surface),0 20px 16px -2px transparent}
+@media (max-width:560px){.pane-card .section-tabs{top:-14px}}
+@supports (animation-timeline:scroll()){
+  .pane-card .section-tabs{animation:section-shade linear both;animation-timeline:scroll(nearest block);animation-range:0 32px}
+}
+@keyframes section-shade{to{box-shadow:0 0 0 10px var(--surface),0 20px 16px -2px var(--surface)}}
+/* What a jump brings into view (a found setting, a guide step) stops below
+   the open pane's strip instead of under it. */
+.pane-card:has(.tab-pane:not([hidden]) .section-tabs:not([hidden])){scroll-padding-top:64px}
+.sub-tab{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:6px;
+  padding:6px 11px;border-radius:6px;color:var(--fg-3);font-size:12px;font-weight:500;cursor:pointer;
+  position:relative;z-index:2;transition:color .2s var(--ease-out);white-space:nowrap;flex:1;justify-content:center}
+@media (max-width:720px){.sub-tab{flex:0 0 auto}}
+.sub-tab:hover{color:var(--fg)}
+.sub-tab.on{color:var(--fg)}
+.sub-tab svg{opacity:.7;width:12px;height:12px}
+.sub-tab.on svg{opacity:1}
+.sub-tab-ind{position:absolute;top:4px;bottom:4px;background:var(--surface-3);border-radius:6px;
+  transition:left .28s var(--ease-out),width .28s var(--ease-out);z-index:1;border:1px solid var(--line-2)}
+/* A strip that scrolls sideways fades the edge that hides more tabs. */
+.tabs.more-r,.sub-tabs.more-r{mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
+.tabs.more-l,.sub-tabs.more-l{mask-image:linear-gradient(90deg,transparent,#000 28px)}
+.tabs.more-l.more-r,.sub-tabs.more-l.more-r{mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+.sub-pane{display:flex;flex-direction:column;gap:20px;animation:paneIn .2s var(--ease-out) both}
+.sub-tab[hidden]{display:none}

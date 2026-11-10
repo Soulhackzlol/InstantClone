@@ -39,6 +39,7 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
     let mut verbose = false;
     let mut max_mb: Option<u64> = None;
     let mut temp = false;
+    let mut parent_pid: Option<u32> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -67,6 +68,12 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
                 });
             }
             "--temp" => temp = true,
+            "--parent-pid" => {
+                parent_pid = it.next().and_then(|s| s.parse().ok()).or_else(|| {
+                    log_line!("--parent-pid needs a number");
+                    std::process::exit(2);
+                });
+            }
             "--verbose" | "-v" => verbose = true,
             "--help" | "-h" => {
                 print_help();
@@ -80,6 +87,14 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
         }
     }
 
+    // Started by the app: leave with it, also when it is killed or crashes,
+    // so no orphaned sink keeps holding the ports.
+    if let Some(pid) = parent_pid {
+        std::thread::spawn(move || {
+            crate::self_update::wait_for_pid_exit_forever(pid);
+            std::process::exit(0);
+        });
+    }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -105,6 +120,7 @@ OPTIONS:
     --temp          Delete the recording on Ctrl+C exit (useful when
                     you're just smoke-testing the pipeline and don't
                     want gigabytes piling up on disk).
+    --parent-pid N  Exit when process N does (the app passes its own)
     --verbose, -v   Log every received tag (very noisy)
     --help, -h      Show this message
 

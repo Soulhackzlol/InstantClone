@@ -1,0 +1,68 @@
+<section class="tab-pane" data-pane="stats" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">Stats</div>
+      <div class="tab-sub">Bitrate and CPU cover the last 60 seconds. The counters below are totals for this session.</div>
+    </div>
+  </div>
+  <div class="stats-big">
+    <div class="stat-card" id="stat-card-rate" title="Incoming video+audio bitrate from OBS, averaged over the last 60 seconds. This is what InstantClone saves for the delay and sends on.">
+      <div class="stat-idle" id="stat-idle" hidden>No video yet. The graph fills in when OBS starts streaming.</div>
+      <div class="stat-head">
+        <span class="stat-label"><svg class="stat-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h3l1.8-5 3 11 1.8-6h3.4"/></svg><span class="ic-label">Bitrate in</span></span>
+        <span class="mono stat-now"><span id="stat-rate">-</span> <span class="stat-unit" id="stat-rate-u">kbps</span></span>
+      </div>
+      <svg class="stat-spark" id="spark-rate" viewBox="0 0 760 70" preserveAspectRatio="none">
+        <path id="spark-rate-fill" class="spark-fill" d=""/>
+        <path id="spark-rate-line" class="spark-line" d=""/>
+      </svg>
+    </div>
+    <div class="stat-card" id="stat-card-cpu" title="CPU used by InstantClone itself (not OBS), averaged over the last 60 seconds.">
+      <div class="stat-head">
+        <span class="stat-label"><svg class="stat-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M6.5 1.5v2M9.5 1.5v2M6.5 12.5v2M9.5 12.5v2M1.5 6.5h2M1.5 9.5h2M12.5 6.5h2M12.5 9.5h2"/></svg><span class="ic-label">CPU</span></span>
+        <span class="mono stat-now"><span id="stat-cpu">-</span><span class="stat-unit">%</span></span>
+      </div>
+      <svg class="stat-spark" id="spark-cpu" viewBox="0 0 360 48" preserveAspectRatio="none">
+        <path id="spark-cpu-fill" class="spark-fill" d="" style="fill:oklch(0.78 0.16 55 / 0.18)"/>
+        <path id="spark-cpu-line" d="" style="fill:none;stroke:oklch(0.78 0.16 55);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round"/>
+      </svg>
+    </div>
+  </div>
+  <div class="stats-small">
+    <div class="metric-mini" title="Video and audio pieces sent to all destinations this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 1.5 14.5 5 8 8.5 1.5 5z"/><path d="M1.5 8 8 11.5 14.5 8"/><path d="M1.5 11 8 14.5 14.5 11"/></svg><span class="ic-label">Frames</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-tags">0</span></div>
+    </div>
+    <div class="metric-mini" title="How much was sent to all destinations this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><ellipse cx="8" cy="4" rx="5.5" ry="2.2"/><path d="M2.5 4v8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V4"/><path d="M2.5 8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2"/></svg><span class="ic-label">Data sent</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-bytes">0</span><span class="metric-unit" id="m-bytes-u"></span></div>
+    </div>
+    <div class="metric-mini" title="Times the delay was cut back toward live. Each cut lands on a keyframe, so viewers see no glitch.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="4" r="2"/><circle cx="4" cy="12" r="2"/><path d="M5.7 5.2 14 11M5.7 10.8 14 5"/></svg><span class="ic-label">Delay cuts</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-cuts">0</span></div>
+    </div>
+    <div class="metric-mini" title="Times OBS disconnected from InstantClone this session (e.g. you stopped/started streaming).">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v3.5M10 2v3.5"/><rect x="4" y="5.5" width="8" height="4" rx="1"/><path d="M8 9.5V14"/></svg><span class="ic-label">OBS drops</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-idis">0</span></div>
+    </div>
+    <div class="metric-mini" title="Times a platform connection dropped and InstantClone reconnected it this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-4"/><path d="M13.5 2v3.5H10"/></svg><span class="ic-label">Reconnects</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-erec">0</span></div>
+    </div>
+    <div class="metric-mini" title="InstantClone's resident memory (RSS) right now.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="5" width="13" height="6" rx="1"/><path d="M4 11v2M7 11v2M10 11v2M13 11v2"/></svg><span class="ic-label">Memory</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-rss">-</span><span class="metric-unit" id="m-rss-u"></span></div>
+    </div>
+  </div>
+  <details class="ic-disclose stats-explain">
+    <summary>What these numbers mean</summary>
+    <div class="ic-disclose-body">
+      <p><b>Frames sent</b>: video and audio pieces sent to all destinations this session. <b>Data sent</b>: how much that adds up to.</p>
+      <p><b>Delay cuts</b>: times the delay was cut back toward live. Each cut lands on a keyframe, so viewers see no glitch.</p>
+      <p><b>OBS drops</b>: times OBS disconnected from InstantClone, for example when you stopped and started streaming.</p>
+      <p><b>Reconnects</b>: times a platform connection dropped and InstantClone connected it again. The Destinations tab says why one failed.</p>
+      <p><b>Memory</b>: how much memory InstantClone itself uses right now.</p>
+    </div>
+  </details>
+</section>
+

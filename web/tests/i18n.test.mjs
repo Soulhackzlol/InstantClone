@@ -85,6 +85,13 @@ test('a phrase capitalized to start a line reads its own key, not a pattern', ()
   assert.equal(tr('Open'), 'Abierto', 'its capitalized key comes first');
 });
 
+test('punctuation a translation starts with sits against the markup before it', () => {
+  const tr = translator({ lang: 'es', strings: { 'tab.': '.', 'Save settings': 'Guardar ajustes' } });
+  assert.equal(tr(' tab.'), '.', '"la pestaña <b>Destinos</b> ." would read wrong');
+  assert.equal(tr(' Save settings'), ' Guardar ajustes', 'a word keeps its space');
+  assert.equal(tr(' .'), ' .', 'text with nothing to translate stays');
+});
+
 test('a name someone typed survives inside a sentence', () => {
   const tr = translator({
     lang: 'es',
@@ -93,6 +100,25 @@ test('a name someone typed survives inside a sentence', () => {
   assert.equal(tr('Stream to My server on'), 'Emitir a My server on', 'a short pattern leaves a name alone');
   assert.equal(tr('Last ran 3 min ago'), 'Última ejecución hace 3 min', 'a count is still read');
   assert.equal(tr("Couldn't save: Kick: stream key required"), 'No se pudo guardar: Kick: falta la clave de transmisión', 'a whole message is too');
+});
+
+test('a label and its value, each with a key, beat a short pattern', () => {
+  const tr = translator({
+    lang: 'es',
+    strings: { 'Post in': 'Publicar en', 'pick a channel': 'elige un canal', '{} channel': '{} canal', '{} on': '{} activas',
+      'Game scene (pick it)': 'Escena de juego (elígela)', 'delay on': 'con delay', 'Runs on': 'Se ejecuta en', 'Any scene': 'Cualquier escena', 'back to live': 'vuelta al directo' },
+  });
+  assert.equal(tr('Post in: pick a channel'), 'Publicar en: elige un canal');
+  assert.equal(tr('Game scene (pick it): delay on'), 'Escena de juego (elígela): con delay', '"{} on" would say "delay activas"');
+  assert.equal(tr('Runs on: Any scene: back to live'), 'Se ejecuta en: Cualquier escena: vuelta al directo', 'labels nest');
+  assert.equal(tr('Post in: My server channel'), 'Post in: My server canal', 'a value without a key falls back to the patterns');
+});
+
+test('a phrase lowered to follow a label reads its capitalized key', () => {
+  const tr = translator({ lang: 'es', strings: { 'Set a {} s delay': 'Poner un delay de {} s', 'Back to live now': 'Volver al directo ya', 'and': 'y' } });
+  assert.equal(tr('set a 30 s delay'), 'poner un delay de 30 s');
+  assert.equal(tr('back to live now'), 'volver al directo ya');
+  assert.equal(tr('and'), 'y', 'its own key still comes first');
 });
 
 test('a value never swallows the pieces of a joined line', () => {

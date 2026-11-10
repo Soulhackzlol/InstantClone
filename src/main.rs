@@ -59,7 +59,13 @@ mod integrations;
 mod json;
 mod local_eb_config;
 mod midi;
+// Build-time only (build.rs includes it); here so its rules are tested.
+#[cfg(test)]
+mod minify;
 mod obs_register;
+// Build-time only (build.rs includes it); here so its rules are tested.
+#[cfg(test)]
+mod pieced;
 mod portcheck;
 mod revisions;
 mod rtmp;
@@ -75,6 +81,7 @@ mod test_support;
 mod trace;
 #[cfg(windows)]
 mod tray;
+mod twitch_key;
 mod update_check;
 mod web;
 #[cfg(windows)]
@@ -619,7 +626,7 @@ fn main() -> std::io::Result<()> {
             ctrl.clone(),
         ));
 
-        // Streamlabs Desktop (experimental): idle until the streamer connects
+        // Streamlabs Desktop: idle until the streamer connects
         // it, then routes its Twitch streams through us while it runs.
         tokio::spawn(streamlabs::run(ctrl.clone(), rx.clone()));
 
@@ -1406,12 +1413,15 @@ async fn manage_test_sink(
         &config::SINK_RTMP_PORT.to_string(),
         "--web-port",
         &config::SINK_WEB_PORT.to_string(),
+        "--parent-pid",
+        &std::process::id().to_string(),
     ])
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())
     // The runtime dropping the supervisor task (app quit) takes the
-    // child with it - no orphaned sink holding the ports.
+    // child with it, and --parent-pid makes the sink leave on its own when
+    // the app is killed or crashes: no orphaned sink holding the ports.
     .kill_on_drop(true);
     // The parent runs without a console (windows_subsystem = windows);
     // without this flag the child would flash one open.

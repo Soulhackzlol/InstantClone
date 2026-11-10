@@ -802,9 +802,28 @@
   // `replay` plays its entrance (and sound) again; `replay: 'full'` also
   // lets it leave after a moment, then it comes back to stay.
   let demoTurn = 0, demoTimer = 0;
+  // Designs found on disk. One that isn't there (a ready-made one never
+  // saved, or one deleted) shows the theme's card, as it does live (next()),
+  // not the server's "not found" page. Asked again each time until found.
+  const demoDesignsFound = new Set();
   function showDemo(data){
     const turn = ++demoTurn;
     clearTimeout(demoTimer);
+    const named = data.card && (data.card.design || (data.look && data.look.design));
+    if (named && !demoDesignsFound.has(named)){
+      fetch(designSrc({design:named}), {cache:'no-store'})
+        .then(r => r.ok).catch(() => false)
+        .then(ok => {
+          if (turn !== demoTurn) return;
+          if (ok) demoDesignsFound.add(named);
+          else data = Object.assign({}, data, {card:Object.assign({}, data.card, {design:''}), look:data.look && Object.assign({}, data.look, {design:''})});
+          drawDemo(data, turn);
+        });
+      return;
+    }
+    drawDemo(data, turn);
+  }
+  function drawDemo(data, turn){
     applyLook(data.look);
     document.querySelectorAll('.card,.design').forEach(c => c.remove());
     if (!data.card) return;

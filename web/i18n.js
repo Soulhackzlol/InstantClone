@@ -12,7 +12,8 @@
 // `tr(text, where)` is the same lookup for code that compares what is on
 // screen with what it is about to write, so a redraw with nothing new
 // writes nothing (see setText). `where` is the element the text goes in.
-// `tr.ATTRS` are the attributes it translates.
+// `tr.ATTRS` are the attributes it translates; `tr.exact(text)` is a whole-text
+// lookup only (null without one).
 (() => {
   const pack = window.IC_I18N || { lang: 'en' };
   document.documentElement.lang = pack.lang;
@@ -20,11 +21,14 @@
   if (!strings) {
     window.tr = text => text;
     window.tr.ATTRS = [];
+    window.tr.exact = () => null;
     return;
   }
 
   const ATTRS = ['title', 'placeholder', 'aria-label', 'alt'];
   const SKIP = 'script,style,textarea,[translate="no"],[contenteditable="true"]';
+  /** A text box's words are someone's own, but its label and hint are ours. */
+  const SKIP_ATTRS = 'script,style,[translate="no"],[contenteditable="true"]';
   /** Texts joined by this ("12 frames · 0 cuts") are looked up a piece at a time. */
   const JOIN = ' · ';
   /** What "{}" matches: never across a join, whose pieces have their own keys. */
@@ -89,9 +93,13 @@
   /** A value lowered to sit mid-sentence ("When someone follows") reads its capitalized key. */
   function lookupValue(value) {
     const said = readValue(value);
-    if (said !== null || !/^[a-z]/.test(value)) return said;
-    const capital = readValue(value[0].toUpperCase() + value.slice(1));
-    return capital === null ? null : capital[0].toLowerCase() + capital.slice(1);
+    if (said !== null) return said;
+    if (/^[a-z]/.test(value)) {
+      const capital = readValue(value[0].toUpperCase() + value.slice(1));
+      if (capital !== null) return capital[0].toLowerCase() + capital.slice(1);
+    }
+    // A labelled value inside a sentence ("Remove On air: live").
+    return lookupLabelled(value);
   }
 
   // A value is often a name someone typed ("Stream to My server on"), which a
@@ -128,6 +136,14 @@
   }
 
   function lookup(core) {
+    // A phrase lowered to follow a label ("Does: set a 30 s delay") reads
+    // its capitalized key when it has none of its own.
+    if (/^[a-z]{2}/.test(core)) {
+      const said = lookupAsIs(core);
+      if (said !== null) return said;
+      const upper = lookupAsIs(core[0].toUpperCase() + core.slice(1));
+      return upper === null ? null : upper[0].toLowerCase() + upper.slice(1);
+    }
     if (!/^[A-Z][a-z]/.test(core)) return lookupAsIs(core);
     // A phrase capitalized to start a line ("Pick a Discord channel"). Its own
     // key comes before any pattern that would read it in pieces ("{} channel").
@@ -140,8 +156,23 @@
     return lower === null ? null : capitalized(lower);
   }
 
+  // "Post in: pick a channel": a label and its value, each with a key of its
+  // own, read better whole than through a short pattern ("{} channel").
+  const LABEL = ': ';
+  function lookupLabelled(core) {
+    const at = core.indexOf(LABEL);
+    if (at < 1) return null;
+    const head = strings[core.slice(0, at)];
+    if (head === undefined) return null;
+    const rest = core.slice(at + LABEL.length);
+    const tail = lookupValue(rest);   // which reads a nested label too
+    return tail === null ? null : head + LABEL + tail;
+  }
+
   function lookupAsIs(core) {
     if (strings[core] !== undefined) return strings[core];
+    const labelled = lookupLabelled(core);
+    if (labelled !== null) return labelled;
     // A piece beside markup keeps its edge: "of 5 running ·", "needs attention."
     const [, lead, inner, trail] = /^([·,:;.→\s]*)([\s\S]*?)([·,:;.→\s]*)$/.exec(core);
     const edged = (lead || trail) && inner;
@@ -170,7 +201,11 @@
       const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
       // A line break inside (a confirm's paragraphs) splits the lookup.
       const lines = core.split(/(\n\s*\n)/);
-      said = lead + lines.map((line, i) => (i % 2 ? line : lookup(line.replace(/\s+/g, ' ')) ?? line)).join('') + trail;
+      const saidCore = lines.map((line, i) => (i % 2 ? line : lookup(line.replace(/\s+/g, ' ')) ?? line)).join('');
+      // After markup ("the <b>OBS</b> tab." is "la pestaña <b>OBS</b>."), a
+      // translation that starts with punctuation drops the space before it.
+      const tight = saidCore !== core && /^[.,;:!?)]/.test(saidCore);
+      said = (tight ? '' : lead) + saidCore + trail;
       if (cache.size >= CACHE_MAX) {
         cache.clear();
         written.clear();
@@ -188,10 +223,15 @@
 
   function translateNode(node) {
     if (node.nodeType === Node.TEXT_NODE) return translateText(node);
-    if (node.nodeType !== Node.ELEMENT_NODE || node.closest(SKIP)) return;
+    if (node.nodeType !== Node.ELEMENT_NODE || node.closest(SKIP_ATTRS)) return;
     translateAttrs(node);
+    if (node.closest(SKIP)) return;
     const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
-      acceptNode: n => (n.nodeType === Node.ELEMENT_NODE && n.matches(SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+      acceptNode: n => {
+        if (n.nodeType !== Node.ELEMENT_NODE || !n.matches(SKIP)) return NodeFilter.FILTER_ACCEPT;
+        if (!n.matches(SKIP_ATTRS)) translateAttrs(n);
+        return NodeFilter.FILTER_REJECT;
+      },
     });
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       if (n.nodeType === Node.TEXT_NODE) translateText(n);
@@ -222,7 +262,7 @@
         });
       } else if (record.type === 'characterData') {
         if (!record.target.parentElement?.closest(SKIP)) translateNode(record.target);
-      } else if (!record.target.closest(SKIP)) {
+      } else if (!record.target.closest(SKIP_ATTRS)) {
         translateAttrs(record.target);
       }
     }
@@ -243,5 +283,8 @@
     window[name] = (message, ...rest) => native(tr(String(message ?? '')), ...rest);
   }
   tr.ATTRS = ATTRS;
+  /** The translation of exactly this text, or null: no patterns, for words
+   * that get saved (a preset's messages), where a near match would mangle. */
+  tr.exact = text => (typeof text === 'string' && Object.hasOwn(strings, text) ? strings[text] : null);
   window.tr = tr;
 })();
