@@ -85,6 +85,43 @@ impl Canvas {
         }
     }
 
+    /// Paint the whole canvas from `colour`, a smooth function of position
+    /// (0.0..1.0 across, then down) giving red, green and blue in 0.0..255.0.
+    /// It is sampled on a grid every `cell` pixels and interpolated between:
+    /// exact enough for anything smooth, at a fraction of a call per pixel.
+    pub fn paint_smooth(&mut self, cell: usize, colour: impl Fn(f32, f32) -> [f32; 3]) {
+        let (columns, rows) = (self.width / cell + 2, self.height / cell + 2);
+        let mut grid = Vec::with_capacity(columns * rows);
+        for row in 0..rows {
+            for column in 0..columns {
+                let x = (column * cell) as f32 / self.width as f32;
+                let y = (row * cell) as f32 / self.height as f32;
+                grid.push(colour(x, y));
+            }
+        }
+        let step = 1.0 / cell as f32;
+        for y in 0..self.height {
+            let (row, down) = (y / cell, (y % cell) as f32 * step);
+            for x in 0..self.width {
+                let (column, across) = (x / cell, (x % cell) as f32 * step);
+                let corner = row * columns + column;
+                let corners = [
+                    grid[corner],
+                    grid[corner + 1],
+                    grid[corner + columns],
+                    grid[corner + columns + 1],
+                ];
+                let channel = |index: usize| {
+                    let top = corners[0][index] + (corners[1][index] - corners[0][index]) * across;
+                    let bottom =
+                        corners[2][index] + (corners[3][index] - corners[2][index]) * across;
+                    (top + (bottom - top) * down).round().clamp(0.0, 255.0) as u8
+                };
+                self.pixels[y * self.width + x] = Rgb::new(channel(0), channel(1), channel(2));
+            }
+        }
+    }
+
     /// Circle with 4x4 supersampled edges.
     pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Rgb) {
         self.fill_ring(cx, cy, radius, 0.0, color);

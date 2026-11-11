@@ -845,6 +845,70 @@ mod tests {
         }
     }
 
+    /// Not a check: prints what a drifting aurora costs at 1080p, by
+    /// tolerance and by how fast it moves. Run with
+    /// `cargo test --release measure_soft_loop -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_soft_loop() {
+        let (width, height, fps) = (1920, 1080, 30);
+        let seconds = 4;
+        let aurora = |canvas: &mut Canvas, phase: f32, travel: f32| {
+            let blobs: [([f32; 3], f32, f32); 3] = [
+                ([90.0, 200.0, 250.0], 0.0, 0.25),
+                ([150.0, 90.0, 240.0], 0.33, 0.6),
+                ([40.0, 220.0, 170.0], 0.66, 0.9),
+            ];
+            canvas.paint_smooth(8, |x, y| {
+                let mut colour = [11.0, 13.0, 18.0];
+                for (tint, offset, across) in blobs {
+                    let angle = std::f32::consts::TAU * (phase + offset);
+                    let cx = across + travel * angle.cos();
+                    let cy = 0.5 + travel * angle.sin();
+                    let (dx, dy) = ((x - cx) * 16.0 / 9.0, y - cy);
+                    let glow = 0.42 * (-(dx * dx + dy * dy) / 0.12).exp();
+                    for channel in 0..3 {
+                        colour[channel] += tint[channel] * glow;
+                    }
+                }
+                colour
+            });
+        };
+        for travel in [0.05, 0.15] {
+            for tolerance in [1, 2, 3] {
+                let started = std::time::Instant::now();
+                let frame_count = fps * seconds;
+                let mut bytes = 0;
+                let mut keyframe = 0;
+                let mut shown: Option<raster::YuvFrame> = None;
+                for index in 0..frame_count {
+                    let mut canvas = Canvas::new(width, height, Rgb::new(11, 13, 18));
+                    // One trip round in 16 s.
+                    aurora(&mut canvas, index as f32 / (16 * fps) as f32, travel);
+                    let frame = canvas.to_yuv420_padded(16);
+                    let coded = match (&shown, index % (2 * fps)) {
+                        (Some(before), at) if at != 0 => {
+                            encoder::encode_p_within(&frame, before, at as u32, tolerance)
+                        }
+                        _ => {
+                            let idr = encoder::encode_idr_within(&frame, 0, tolerance);
+                            keyframe = idr.nal.len();
+                            idr
+                        }
+                    };
+                    bytes += coded.nal.len();
+                    shown = Some(coded.shown);
+                }
+                log_line!(
+                    "travel {travel} tolerance {tolerance}: {} kbps, keyframe {} KB, built in {:?}",
+                    bytes * 8 / (seconds * 1000),
+                    keyframe / 1000,
+                    started.elapsed()
+                );
+            }
+        }
+    }
+
     /// The rendered frames, cropped to the visible size, twice over.
     fn expected_frames(settings: &CrashProtection, shape: StreamShape) -> Vec<u8> {
         let style = screen_style(settings);
