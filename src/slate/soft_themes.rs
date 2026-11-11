@@ -49,7 +49,11 @@ impl Pool {
         let text_width = font::width(style.headline, line(HEADLINE_PX, Weight::SemiBold)).max(
             font::width(style.subline, line(SUBLINE_PX, Weight::Regular)),
         );
-        let margin = POOL_MARGIN_AT_1080 * scale + POOL_BLOCK_MARGIN_PX;
+        // Below 540 px (the dashboard's previews) the block margin shrinks
+        // with the canvas: there it would swallow most of the screen, and
+        // looking like the full-size screen matters more than a few bits.
+        let block_margin = POOL_BLOCK_MARGIN_PX * (2.0 * scale).min(1.0);
+        let margin = POOL_MARGIN_AT_1080 * scale + block_margin;
         let (center_x, _) = canvas_center(canvas);
         Self {
             left: center_x - text_width / 2.0 - margin,

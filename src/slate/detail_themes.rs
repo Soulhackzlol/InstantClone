@@ -37,11 +37,14 @@ pub fn draw_halftone(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     let pitch = (HALFTONE_PITCH_AT_1080 * scale / 16.0).round().max(1.0) as usize * 16;
     let baseline = centred_baseline(canvas);
     let pool = Pool::around_text(canvas, style, baseline);
-    let ink = HALFTONE_INK.mix(style.accent, 0.3);
-    let sprites: Vec<Vec<f32>> = (1..=HALFTONE_SIZES)
+    // Each size has its own shape and ink: thicker smoke prints bigger,
+    // brighter dots, deeper in the accent, which gives the smoke depth.
+    let sizes: Vec<(Vec<f32>, Rgb)> = (1..=HALFTONE_SIZES)
         .map(|size| {
-            let area = size as f32 / HALFTONE_SIZES as f32;
-            dot_coverage(pitch, 0.5 * pitch as f32 * area.sqrt())
+            let thickness = size as f32 / HALFTONE_SIZES as f32;
+            let shape = dot_coverage(pitch, 0.5 * pitch as f32 * thickness.sqrt());
+            let ink = HALFTONE_INK.mix(style.accent, 0.15 + 0.35 * thickness);
+            (shape, style.background.mix(ink, 0.55 + 0.45 * thickness))
         })
         .collect();
     // Phase 1.0 is the first step again, not one past the last.
@@ -61,7 +64,8 @@ pub fn draw_halftone(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
                 smoothstep(SMOKE_CLEAR_BELOW, 0.9, thickness) * pool.reach(center_x, center_y);
             let size = (density * HALFTONE_SIZES as f32).round() as usize;
             if size > 0 {
-                stamp(canvas, &sprites[size - 1], (left, top), pitch, ink);
+                let (shape, ink) = &sizes[size - 1];
+                stamp(canvas, shape, (left, top), pitch, *ink);
             }
         }
     }
@@ -241,7 +245,8 @@ pub fn draw_embers(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
         let spark = Spark {
             x: (random(0) + sway) * width,
             y: (1.08 - 1.16 * progress) * height,
-            size: (5.0 + 7.0 * random(5)) * scale.max(0.25),
+            // Never under 2.5 px, so the sparks show on small previews too.
+            size: ((5.0 + 7.0 * random(5)) * scale).max(2.5),
             brightness: (0.45 + 0.55 * random(6)) * (PI * progress).sin().powf(0.7),
             tint: [0, 1, 2].map(|c| accent[c] + (warm[c] - accent[c]) * random(7)),
         };
