@@ -460,11 +460,12 @@ async fn serve(
     if method == "GET" && bare_path == "/crash-protection/preview" {
         let query = path.split_once('?').map_or("", |(_, q)| q).to_string();
         let saved = settings.borrow().crash_protection.clone();
-        let image = tokio::task::spawn_blocking(move || crash_protection_preview(&query, &saved))
-            .await
-            .map_err(io::Error::other)?;
+        let (content_type, image) =
+            tokio::task::spawn_blocking(move || crash_protection_preview(&query, &saved))
+                .await
+                .map_err(io::Error::other)?;
         let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
              Cache-Control: no-store\r\nConnection: close\r\n\r\n",
             image.len()
         );
@@ -516,11 +517,13 @@ async fn serve(
 /// the dashboard can preview before Save. `orientation=vertical` flips it
 /// to 9:16; `phase` (0..1) picks the moment in the 2 s loop, or
 /// `frames=N` stacks N evenly spaced moments into one strip the dashboard
-/// animates; `size=thumb` draws the small version the theme picker shows.
+/// animates; `size=thumb` draws the small version the theme picker shows;
+/// `format=mp4` encodes the whole loop as a video instead, the preview of
+/// the soft themes. Answers the content type with the bytes.
 fn crash_protection_preview(
     query: &str,
     saved: &crate::crash_protection::CrashProtection,
-) -> Vec<u8> {
+) -> (&'static str, Vec<u8>) {
     const DEFAULT_PHASE: f32 = 0.25;
     const MAX_FRAMES: usize = 24;
     let form = config::parse_form(query);
@@ -551,7 +554,13 @@ fn crash_protection_preview(
             .filter(|value| (0.0..1.0).contains(value))
             .unwrap_or(DEFAULT_PHASE)],
     };
-    crate::slate::preview_png(&settings, width, height, &phases)
+    if form.get("format").map(String::as_str) == Some("mp4") {
+        if let Some(video) = crate::slate::preview_mp4(&settings, width, height) {
+            return ("video/mp4", video);
+        }
+    }
+    let image = crate::slate::preview_png(&settings, width, height, &phases);
+    ("image/png", image)
 }
 
 /// Result of the auth gate: either it already wrote a response (login page,
@@ -7282,9 +7291,14 @@ mod tests {
     #[test]
     fn crash_protection_preview_applies_unsaved_edits() {
         let saved = crate::crash_protection::CrashProtection::default();
-        let landscape = crash_protection_preview("", &saved);
-        let arcade = crash_protection_preview("crash_protection.theme=arcade", &saved);
-        let vertical = crash_protection_preview("orientation=vertical", &saved);
+        let image = |query: &str| {
+            let (content_type, bytes) = crash_protection_preview(query, &saved);
+            assert_eq!(content_type, "image/png", "{query}");
+            bytes
+        };
+        let landscape = image("");
+        let arcade = image("crash_protection.theme=arcade");
+        let vertical = image("orientation=vertical");
         // PNG: width and height sit big-endian at bytes 16 and 20.
         let size = |png: &[u8]| {
             let read = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
@@ -7293,13 +7307,18 @@ mod tests {
         assert_eq!(&landscape[1..4], b"PNG");
         assert_ne!(landscape, arcade, "query edits reach the render");
         assert_eq!(size(&vertical), (270, 480));
-        let thumb = crash_protection_preview("size=thumb", &saved);
+        let thumb = image("size=thumb");
         assert_eq!(size(&thumb), (192, 108));
-        let strip = crash_protection_preview("frames=24", &saved);
+        let strip = image("frames=24");
         assert_eq!(size(&strip), (480, 270 * 24), "24 frames stacked");
-        let capped = crash_protection_preview("frames=500&size=thumb", &saved);
+        let capped = image("frames=500&size=thumb");
         assert_eq!(size(&capped), (192, 108 * 24));
-        for preview_only in ["orientation", "size", "phase", "frames"] {
+        // A soft theme's video preview: an MP4, starting with its ftyp box.
+        let (content_type, video) =
+            crash_protection_preview("crash_protection.theme=halo&size=thumb&format=mp4", &saved);
+        assert_eq!(content_type, "video/mp4");
+        assert_eq!(&video[4..8], b"ftyp");
+        for preview_only in ["orientation", "size", "phase", "frames", "format"] {
             assert!(
                 !is_settable_key(preview_only),
                 "preview-only params never persist"

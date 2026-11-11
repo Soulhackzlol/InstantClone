@@ -16,6 +16,7 @@ mod encoder;
 mod font;
 mod hevc;
 mod hevc_residual;
+mod mp4;
 mod pixel_font;
 mod png;
 mod raster;
@@ -122,6 +123,25 @@ pub fn preview_png(
     Canvas::stacked(frames)
         .unwrap_or_else(|| Canvas::new(width, height, style.background))
         .to_png()
+}
+
+/// Frame rate of the dashboard's video preview of a soft screen: the
+/// stream's own, so it moves exactly as viewers see it.
+const PREVIEW_FPS: u32 = 30;
+
+/// The screen as a looping H.264 video, for the dashboard's preview of
+/// soft themes: smooth motion a strip of stills can't show, from the
+/// encoder the stream uses, so the preview is what viewers get. `None`
+/// for a size the encoder can't take.
+pub fn preview_mp4(settings: &CrashProtection, width: usize, height: usize) -> Option<Vec<u8>> {
+    let shape = StreamShape {
+        width,
+        height,
+        fps: PREVIEW_FPS,
+    };
+    let slate = build_loop(settings, shape, SlateCodec::H264).ok()?;
+    let sets = encoder::parameter_sets(shape);
+    Some(mp4::h264_loop(&slate, &sets, PREVIEW_FPS))
 }
 
 fn screen_style(settings: &CrashProtection) -> ScreenStyle<'_> {
@@ -1010,6 +1030,47 @@ mod tests {
                 started.elapsed()
             );
         }
+    }
+
+    /// The dashboard's video preview must play in a real decoder: ffmpeg
+    /// reads it as an MP4 of the whole loop, frame for frame.
+    #[test]
+    fn the_video_preview_is_a_playable_mp4_of_one_loop() {
+        if !ffmpeg_is_available("the video preview check") {
+            return;
+        }
+        let theme = SlateTheme::Aurora;
+        let video = preview_mp4(&settings(theme), 192, 108).expect("an even size");
+        let path =
+            std::env::temp_dir().join(format!("instantclone-preview-{}.mp4", std::process::id()));
+        std::fs::write(&path, &video).unwrap();
+        let _turn = ffmpeg_turn();
+        let probe = Command::new("ffprobe")
+            .args(["-v", "error", "-count_frames", "-select_streams", "v:0"])
+            .args([
+                "-show_entries",
+                "stream=codec_name,width,height,nb_read_frames",
+            ])
+            .args(["-of", "csv=p=0"])
+            .arg(&path)
+            .output();
+        let _ = std::fs::remove_file(&path);
+        let Ok(probe) = probe else {
+            log_line!("NOTE: ffprobe not found, so the video preview check did not run");
+            return;
+        };
+        let frames = frames_per_interval(PREVIEW_FPS) * theme.loop_intervals();
+        assert_eq!(
+            String::from_utf8_lossy(&probe.stdout).trim(),
+            format!("h264,192,108,{frames}"),
+            "ffprobe: {}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        assert!(
+            probe.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
     }
 
     /// The rendered frames, cropped to the visible size, twice over.

@@ -20,6 +20,10 @@
 .crash-preview{display:block;width:100%;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45);aspect-ratio:16/9;
   background:var(--surface) no-repeat 0 0/100% 2400%;animation:crash-loop 2s steps(24,jump-none) infinite}
 .crash-preview-frame.vertical .crash-preview{width:auto;height:100%;aspect-ratio:9/16}
+/* Soft styles move smoothly, so they preview as a looping video of the
+   stream's own encode instead of a strip of stills. */
+.crash-preview-video{background:var(--surface);object-fit:cover;animation:none}
+.crash-preview[hidden]{display:none}
 /* The preview is one strip of 24 frames (CP_PREVIEW_FRAMES) stacked top to
    bottom; sliding it a frame at a time plays the 2 s loop with no script. */
 @keyframes crash-loop{to{background-position:0 100%}}

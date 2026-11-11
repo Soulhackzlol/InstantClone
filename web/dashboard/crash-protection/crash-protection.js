@@ -18,6 +18,10 @@ let cpThumbKey = '';
 // Bumped per refresh, so a strip that loads after a newer one is dropped.
 let cpGeneration = 0;
 let cpStripUrl = '';
+let cpVideoUrl = '';
+// Whether the preview is on screen: the video only plays while it is.
+let cpPreviewSeen = true;
+const cpStill = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function cpInit(){
   const custom = $('s-cp-accent').parentElement;
@@ -148,6 +152,12 @@ function cpRefresh(){
       card.querySelector('img').src = previewUrl({'crash_protection.theme': card.dataset.cpTheme, size: 'thumb', phase: '0.3'});
     });
   }
+  const theme = cpThemes.find(t => t.id === cpState.theme);
+  if (theme && theme.soft) {
+    cpRefreshVideo(previewUrl({orientation: cpState.shape, format: 'mp4'}), generation);
+    return;
+  }
+  cpShowVideo(false);
   // Fetch the strip whole and swap it in once it has arrived, so the
   // preview never flashes empty or half-drawn while it loads.
   fetch(previewUrl({orientation: cpState.shape, frames: String(CP_PREVIEW_FRAMES)}))
@@ -159,6 +169,33 @@ function cpRefresh(){
       $('s-cp-preview').style.backgroundImage = 'url("' + cpStripUrl + '")';
     })
     .catch(() => {});
+}
+// A soft style's preview: the loop encoded as the stream carries it,
+// fetched whole and swapped in once it has arrived, like the strip.
+function cpRefreshVideo(url, generation){
+  fetch(url)
+    .then(response => response.ok ? response.blob() : Promise.reject(response.status))
+    .then(blob => {
+      if (generation !== cpGeneration) return;
+      URL.revokeObjectURL(cpVideoUrl);
+      cpVideoUrl = URL.createObjectURL(blob);
+      $('s-cp-preview-video').src = cpVideoUrl;
+      cpShowVideo(true);
+    })
+    .catch(() => {});
+}
+function cpShowVideo(show){
+  const video = $('s-cp-preview-video');
+  video.hidden = !show;
+  $('s-cp-preview').hidden = show;
+  cpPlayVideo();
+}
+// Plays only while shown and on screen; with reduced motion it rests on
+// its first frame.
+function cpPlayVideo(){
+  const video = $('s-cp-preview-video');
+  if (!video.hidden && cpPreviewSeen && !cpStill) video.play().catch(() => {});
+  else video.pause();
 }
 function cpApplyConfig(cp){
   if (!cp) return;
@@ -184,6 +221,8 @@ cpInit();
 if ('IntersectionObserver' in window){
   new IntersectionObserver(entries => entries.forEach(e => e.target.classList.toggle('resting', !e.isIntersecting)))
     .observe($('s-cp-preview'));
+  new IntersectionObserver(entries => entries.forEach(e => { cpPreviewSeen = e.isIntersecting; cpPlayVideo(); }))
+    .observe($('s-cp-preview-frame'));
 }
 
 

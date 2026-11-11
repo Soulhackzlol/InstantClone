@@ -250,10 +250,11 @@ impl CrashProtection {
             .iter()
             .map(|theme| {
                 format!(
-                    r#"{{"id":{},"name":{},"background":{}}}"#,
+                    r#"{{"id":{},"name":{},"background":{},"soft":{}}}"#,
                     crate::config::json_str(theme.id()),
                     crate::config::json_str(theme.name()),
                     crate::config::json_str(&theme.default_background().to_hex()),
+                    theme.is_soft(),
                 )
             })
             .collect();
