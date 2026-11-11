@@ -7,7 +7,8 @@
 //! - intra planar, DC, vertical or horizontal with no residual, when that
 //!   prediction is close enough (flat areas, even ramps);
 //! - the same with transform residual, for soft detail (gradients,
-//!   glows). Only screens that allow a tolerance use it;
+//!   glows), in one transform block or split into smaller ones for small
+//!   detail (dots). Only screens that allow a tolerance use it;
 //! - PCM, 16x16 only: the raw samples, for anything else;
 //! - skip: close enough to the previous picture already (zero motion);
 //! - carried over with residual: the previous picture's block (zero
@@ -29,7 +30,7 @@
 use super::bitstream::{self, BitWriter};
 use super::cabac::{CabacWriter, Context};
 use super::encoder::{Coded, StreamShape};
-use super::hevc_residual::{self, ResidualContexts};
+use super::hevc_residual::{self, Kernel, ResidualContexts};
 use transform_tree::{Coefficients, Residual};
 
 mod transform_tree;
@@ -100,6 +101,24 @@ impl IntraMode {
     /// Where this mode sits in `INTRA_MODES_BY_INDEX`.
     fn index(self) -> usize {
         self.chroma_index() as usize
+    }
+
+    /// Whether a unit predicted in this mode may split its transform tree:
+    /// 4x4 and 8x8 blocks in the vertical and horizontal modes take
+    /// another coefficient scan (7.4.9.11), which the encoder doesn't write.
+    fn splits(self) -> bool {
+        matches!(self, IntraMode::Planar | IntraMode::Dc)
+    }
+
+    /// The mode a split unit takes in place of this one: itself if it
+    /// splits, else planar. Small blocks predict from their own
+    /// neighbours, so the unit's best mode as a whole matters less there.
+    fn for_split(self) -> Self {
+        if self.splits() {
+            self
+        } else {
+            IntraMode::Planar
+        }
     }
 }
 
@@ -185,8 +204,8 @@ fn sps_rbsp(shape: StreamShape, level: u32) -> Vec<u8> {
     w.ue(2); // log2_diff_max_min_luma_coding_block_size: CTB 32
     w.ue(0); // log2_min_luma_transform_block_size_minus2: 4
     w.ue(3); // log2_diff_max_min_luma_transform_block_size: 32
-    w.ue(transform_tree::MAX_INTER_DEPTH as u32); // max_transform_hierarchy_depth_inter
-    w.ue(0); // max_transform_hierarchy_depth_intra
+    w.ue(transform_tree::MAX_DEPTH as u32); // max_transform_hierarchy_depth_inter
+    w.ue(transform_tree::MAX_DEPTH as u32); // max_transform_hierarchy_depth_intra
     w.bit(false); // scaling_list_enabled_flag
     w.bit(false); // amp_enabled_flag
     w.bit(false); // sample_adaptive_offset_enabled_flag
@@ -419,6 +438,52 @@ const GOOD_ENOUGH_BITS: usize = HEADER_BITS + 32;
 /// Residual this cheap whole is not tried split as well.
 const CHEAP_RESIDUAL_BITS: usize = 48;
 
+/// One shape of transform tree a unit's residual is tried in, at each QP:
+/// split `depth` times.
+struct Split {
+    depth: usize,
+    prediction: SplitPrediction,
+}
+
+/// What a split's blocks are predicted from.
+enum SplitPrediction {
+    /// One prediction made for the whole unit (any carried-over unit, an
+    /// intra one unsplit). Its transforms don't depend on the QP: they're
+    /// made the first time one needs them.
+    Fixed(Option<Coefficients>),
+    /// An intra unit's, in these modes (luma, chroma). Each block predicts
+    /// from the ones decoded before it, the unit's own included, so it is
+    /// all redone at each QP.
+    Intra([IntraMode; 2]),
+}
+
+impl Split {
+    fn fixed(depth: usize) -> Self {
+        Self {
+            depth,
+            prediction: SplitPrediction::Fixed(None),
+        }
+    }
+
+    fn intra(depth: usize, modes: [IntraMode; 2]) -> Self {
+        Self {
+            depth,
+            prediction: SplitPrediction::Intra(modes),
+        }
+    }
+}
+
+/// Residual that brings a prediction within the tolerance.
+struct Corrected {
+    residual: Residual,
+    /// What a decoder shows with it.
+    shown: Samples,
+    /// Roughly what the residual costs.
+    bits: usize,
+    /// The intra modes (luma, chroma) of a split that chose its own.
+    modes: Option<[IntraMode; 2]>,
+}
+
 /// A block's samples: luma, then Cb and Cr.
 #[derive(Clone)]
 struct Samples {
@@ -452,7 +517,9 @@ struct Contexts {
     split_transform: [Context; 3],
     /// cbf_luma: ctxInc 1 at trafoDepth 0, else 0.
     cbf_luma: [Context; 2],
-    /// cbf_cb and cbf_cr share theirs, by trafoDepth.
+    /// cbf_cb and cbf_cr share theirs, by trafoDepth. Never coded at
+    /// depth 3: a 32x32 unit's blocks there are 4x4, whose chroma their
+    /// parent's flags cover.
     cbf_chroma: [Context; 3],
     /// cu_qp_delta_abs: its first bin, then the rest.
     cu_qp_delta: [Context; 2],
@@ -653,14 +720,17 @@ impl<'a> PictureCoder<'a> {
             !source.luma.within(&current.luma, self.tolerance),
             !source.chroma.within(&current.chroma, self.tolerance),
         ];
-        let depths = 0..=transform_tree::MAX_INTER_DEPTH;
-        let (residual, shown, bits) =
-            self.with_residual(block, (source, current), needs, fixed_qp, depths)?;
+        let splits = transform_tree::depths(block.size)
+            .map(Split::fixed)
+            .collect();
+        let corrected = self.with_residual(block, (source, current), needs, fixed_qp, splits)?;
         // Merged 2Nx2N with no residual would be a skip: never coded so.
-        residual.has_levels().then_some(Decision {
-            coding: CuCoding::CarriedOver { residual },
-            shown,
-            bits: bits + HEADER_BITS,
+        corrected.residual.has_levels().then_some(Decision {
+            coding: CuCoding::CarriedOver {
+                residual: corrected.residual,
+            },
+            shown: corrected.shown,
+            bits: corrected.bits + HEADER_BITS,
         })
     }
 
@@ -717,34 +787,40 @@ impl<'a> PictureCoder<'a> {
             });
         }
         let needs = [!luma_close, !chroma_close];
-        match self.with_residual(block, (source, &prediction), needs, fixed_qp, 0..=0) {
-            Some((residual, shown, bits)) => Some(Decision {
-                coding: CuCoding::Predicted {
-                    luma: luma_mode,
-                    chroma: chroma_mode,
-                    residual: Some(residual),
-                },
-                shown,
-                bits: bits + HEADER_BITS,
-            }),
-            None => (block.size == SPLIT_CU).then(pcm),
-        }
+        let modes = [luma_mode.for_split(), chroma_mode.for_split()];
+        let split_depths = transform_tree::depths(block.size).skip(1);
+        let splits = std::iter::once(Split::fixed(0))
+            .chain(split_depths.map(|depth| Split::intra(depth, modes)))
+            .collect();
+        let Some(corrected) =
+            self.with_residual(block, (source, &prediction), needs, fixed_qp, splits)
+        else {
+            return (block.size == SPLIT_CU).then(pcm);
+        };
+        let [luma, chroma] = corrected.modes.unwrap_or([luma_mode, chroma_mode]);
+        Some(Decision {
+            coding: CuCoding::Predicted {
+                luma,
+                chroma,
+                residual: Some(corrected.residual),
+            },
+            shown: corrected.shown,
+            bits: corrected.bits + HEADER_BITS,
+        })
     }
 
     /// `prediction` corrected by residual in the planes `needs` names
     /// (luma, chroma), at the coarsest QP on the ladder (or `fixed_qp`)
-    /// that lands within the tolerance, with the transform tree split as
-    /// many times (of `depths`) as costs least: the residual, what a
-    /// decoder shows and the residual's estimated bits. `None` when no QP
-    /// does it for fewer bits than raw samples.
+    /// that lands within the tolerance, in whichever of `splits` costs
+    /// least. `None` when no QP does it for fewer bits than raw samples.
     fn with_residual(
         &mut self,
         block: Block,
         (source, prediction): (&Samples, &Samples),
         needs: [bool; 2],
         fixed_qp: Option<i32>,
-        depths: std::ops::RangeInclusive<usize>,
-    ) -> Option<(Residual, Samples, usize)> {
+        mut splits: Vec<Split>,
+    ) -> Option<Corrected> {
         let ladder: Vec<(usize, i32)> = match fixed_qp {
             Some(qp) => vec![(self.ladder_step, qp)],
             None => QP_LADDER
@@ -755,39 +831,67 @@ impl<'a> PictureCoder<'a> {
                 .collect(),
         };
         let pcm_bits = PCM_BITS * (block.size / SPLIT_CU).pow(2);
-        // Each split's transforms, made the first time a QP needs them.
-        let mut splits: Vec<(usize, Option<Coefficients>)> =
-            depths.map(|depth| (depth, None)).collect();
         for (step, qp) in ladder {
-            let mut cheapest: Option<(Residual, Samples, usize)> = None;
-            for (depth, coefficients) in &mut splits {
-                let coefficients = coefficients
-                    .get_or_insert_with(|| Coefficients::of(source, prediction, needs, *depth));
-                if let Some((residual, shown)) = self.attempt(source, prediction, coefficients, qp)
-                {
-                    let bits = residual.estimated_bits();
-                    if cheapest.as_ref().is_none_or(|(_, _, best)| bits < *best) {
-                        cheapest = Some((residual, shown, bits));
+            let mut cheapest: Option<Corrected> = None;
+            for split in &mut splits {
+                let attempt = self.attempt_split(block, (source, prediction), needs, split, qp);
+                // Splits run shallow to deep. Detail too small for the
+                // shallow ones fails them and goes on; once one has worked,
+                // a deeper one failing or costing more ends the search.
+                match attempt {
+                    Some(better)
+                        if cheapest.as_ref().is_none_or(|best| better.bits < best.bits) =>
+                    {
+                        cheapest = Some(better);
                     }
+                    _ if cheapest.is_some() => break,
+                    _ => {}
                 }
                 // Splitting can only save a few bits on a cheap block.
                 if cheapest
                     .as_ref()
-                    .is_some_and(|(_, _, bits)| *bits <= CHEAP_RESIDUAL_BITS)
+                    .is_some_and(|best| best.bits <= CHEAP_RESIDUAL_BITS)
                 {
                     break;
                 }
             }
-            let Some((residual, shown, bits)) = cheapest else {
+            let Some(corrected) = cheapest else {
                 continue;
             };
-            if bits >= pcm_bits {
+            if corrected.bits >= pcm_bits {
                 break;
             }
             self.ladder_step = step;
-            return Some((residual, shown, bits));
+            return Some(corrected);
         }
         None
+    }
+
+    /// One attempt at `split` at `qp`. `None` when a sample lands outside
+    /// the tolerance.
+    fn attempt_split(
+        &mut self,
+        block: Block,
+        (source, prediction): (&Samples, &Samples),
+        needs: [bool; 2],
+        split: &mut Split,
+        qp: i32,
+    ) -> Option<Corrected> {
+        let depth = split.depth;
+        let coefficients = match &mut split.prediction {
+            SplitPrediction::Intra(modes) => {
+                return self.attempt_intra(block, source, *modes, (depth, qp));
+            }
+            SplitPrediction::Fixed(coefficients) => coefficients
+                .get_or_insert_with(|| Coefficients::of(source, prediction, needs, depth)),
+        };
+        let (residual, shown) = self.attempt(source, prediction, coefficients, qp)?;
+        Some(Corrected {
+            bits: residual.estimated_bits(),
+            residual,
+            shown,
+            modes: None,
+        })
     }
 
     /// The first candidate whose prediction is within the tolerance;
@@ -815,6 +919,8 @@ impl<'a> PictureCoder<'a> {
 
     /// Quantise each plane's `coefficients` at `qp` and rebuild them as a
     /// decoder will. `None` when a sample lands outside the tolerance.
+    /// Always the DCT: a fixed prediction is inter, or intra unsplit, so
+    /// no block is 4x4 intra luma.
     fn attempt(
         &self,
         source: &Samples,
@@ -832,7 +938,7 @@ impl<'a> PictureCoder<'a> {
                 let quantized = hevc_residual::quantize(block, side, qp);
                 let has_levels = quantized.iter().any(|level| *level != 0);
                 rebuilt.push(if has_levels {
-                    hevc_residual::rebuild(&quantized, side, qp)
+                    hevc_residual::rebuild(&quantized, side, qp, Kernel::Dct)
                 } else {
                     vec![0; side * side]
                 });
@@ -1033,47 +1139,38 @@ impl<'a> PictureCoder<'a> {
 
     /// `block`'s samples in `frame`.
     fn read_samples(&self, frame: &YuvFrame, block: Block) -> Samples {
-        let read = |plane: Plane| {
-            let (samples, stride) = plane.of(frame);
-            let (x0, y0, size) = plane.scaled(block);
-            let mut out = Vec::with_capacity(size * size);
-            for row in 0..size {
-                let start = (y0 + row) * stride + x0;
-                out.extend_from_slice(&samples[start..start + size]);
-            }
-            out
-        };
         Samples {
-            luma: read(Plane::Luma),
-            chroma: [read(Plane::Cb), read(Plane::Cr)],
+            luma: read_plane(frame, block, Plane::Luma),
+            chroma: [Plane::Cb, Plane::Cr].map(|plane| read_plane(frame, block, plane)),
         }
     }
 
     /// Put `samples` into the decoder's picture at `block`.
     fn write_shown(&mut self, block: Block, samples: &Samples) {
-        let planes = [
-            (Plane::Luma, &samples.luma),
-            (Plane::Cb, &samples.chroma[0]),
-            (Plane::Cr, &samples.chroma[1]),
-        ];
-        for (plane, values) in planes {
-            let (x0, y0, size) = plane.scaled(block);
-            let width = self.shown.width;
-            let (target, stride) = match plane {
-                Plane::Luma => (&mut self.shown.y, width),
-                Plane::Cb => (&mut self.shown.u, width / 2),
-                Plane::Cr => (&mut self.shown.v, width / 2),
-            };
-            for row in 0..size {
-                let start = (y0 + row) * stride + x0;
-                target[start..start + size].copy_from_slice(&values[row * size..(row + 1) * size]);
-            }
+        self.write_shown_plane(block, Plane::Luma, &samples.luma);
+        self.write_shown_plane(block, Plane::Cb, &samples.chroma[0]);
+        self.write_shown_plane(block, Plane::Cr, &samples.chroma[1]);
+    }
+
+    /// Put one plane's `values` into the decoder's picture at `block`.
+    fn write_shown_plane(&mut self, block: Block, plane: Plane, values: &[u8]) {
+        let (x0, y0, size) = plane.scaled(block);
+        let width = self.shown.width;
+        let (target, stride) = match plane {
+            Plane::Luma => (&mut self.shown.y, width),
+            Plane::Cb => (&mut self.shown.u, width / 2),
+            Plane::Cr => (&mut self.shown.v, width / 2),
+        };
+        for row in 0..size {
+            let start = (y0 + row) * stride + x0;
+            target[start..start + size].copy_from_slice(&values[row * size..(row + 1) * size]);
         }
     }
 
-    /// Whether the luma sample at (`x`, `y`) is decoded before `block`:
-    /// inside the picture, and earlier in z-scan order (6.4.1). Earlier
-    /// CTUs are decoded; inside the same CTU, an earlier 16x16 quarter.
+    /// Whether the luma sample at (`x`, `y`) is decoded before the block
+    /// (coding or transform) at `block`: inside the picture, and earlier
+    /// in z-scan order (6.4.1). Earlier CTUs are decoded; inside the same
+    /// CTU, what comes earlier in z-order of the smallest transform blocks.
     fn is_decoded(&self, x: isize, y: isize, block: Block) -> bool {
         let (width, height) = (self.source.width as isize, self.source.height as isize);
         if x < 0 || y < 0 || x >= width || y >= height {
@@ -1086,8 +1183,10 @@ impl<'a> PictureCoder<'a> {
         if neighbour != current {
             return neighbour < current;
         }
-        let quarter = |x: usize, y: usize| (y % CTB) / SPLIT_CU * 2 + (x % CTB) / SPLIT_CU;
-        quarter(x, y) < quarter(block.x, block.y)
+        let grain = transform_tree::MIN_SIDE;
+        let z_order =
+            |x: usize, y: usize| transform_tree::z_index((x % CTB) / grain, (y % CTB) / grain);
+        z_order(x, y) < z_order(block.x, block.y)
     }
 
     /// The reference samples of `block` in `plane` (8.4.4.2.2), with
@@ -1176,6 +1275,18 @@ impl Plane {
     }
 }
 
+/// `block`'s samples of one plane of `frame`.
+fn read_plane(frame: &YuvFrame, block: Block, plane: Plane) -> Vec<u8> {
+    let (samples, stride) = plane.of(frame);
+    let (x0, y0, size) = plane.scaled(block);
+    let mut out = Vec::with_capacity(size * size);
+    for row in 0..size {
+        let start = (y0 + row) * stride + x0;
+        out.extend_from_slice(&samples[start..start + size]);
+    }
+    out
+}
+
 /// Sample comparisons for one plane or a pair of chroma planes.
 trait SampleSet {
     fn within(&self, other: &Self, tolerance: i32) -> bool;
@@ -1214,8 +1325,8 @@ struct References {
 }
 
 impl References {
-    /// The [1 2 1] smoothing planar prediction of luma reads (8.4.4.2.3;
-    /// strong smoothing is off in the SPS).
+    /// The [1 2 1] smoothing planar prediction of luma 8x8 and up reads
+    /// (8.4.4.2.3; strong smoothing is off in the SPS).
     fn smoothed(&self) -> Self {
         let last = self.left.len() - 1;
         let smooth = |edge: &[i32], at: usize| {
@@ -1243,7 +1354,7 @@ impl References {
     /// predSamples (8.4.4.2.4 to 8.4.4.2.6), row by row, with the edge
     /// filters luma blocks below 32x32 get.
     fn predict(&self, mode: IntraMode, size: usize, is_luma: bool) -> Vec<u8> {
-        if mode == IntraMode::Planar && is_luma {
+        if mode == IntraMode::Planar && is_luma && size > 4 {
             return self.smoothed().predict(mode, size, false);
         }
         let filters_edges = is_luma && size < 32;

@@ -481,23 +481,32 @@ mod tests {
             .into_iter()
             .flat_map(|theme| CODECS.map(|codec| (theme, codec)))
             .collect();
-        let over_budget: Vec<String> = std::thread::scope(|scope| {
-            let builds: Vec<_> = every_pair
-                .iter()
-                .map(|&(theme, codec)| {
-                    scope.spawn(move || {
+        // A quarter of the cores each: the three budget tests run side by
+        // side, and the wall-clock simulations (`controller::user_sim`)
+        // beside them fail when starved of the rest.
+        let workers =
+            std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 4).max(1));
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let built = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| {
+                    let claim = || next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    while let Some(&(theme, codec)) = every_pair.get(claim()) {
                         let slate = build_loop_quietly(&settings(theme), shape, codec).unwrap();
-                        (theme, codec, loop_kbps(&slate))
-                    })
-                })
-                .collect();
-            builds
-                .into_iter()
-                .map(|build| build.join().expect("a loop build panicked"))
-                .filter(|(theme, _, kbps)| *kbps >= budget_kbps(*theme, max_kbps))
-                .map(|(theme, codec, kbps)| format!("{theme:?} {codec:?} at {kbps} kbps"))
-                .collect()
+                        let kbps = loop_kbps(&slate);
+                        built.lock().unwrap().push((theme, codec, kbps));
+                    }
+                });
+            }
         });
+        let over_budget: Vec<String> = built
+            .into_inner()
+            .unwrap()
+            .into_iter()
+            .filter(|(theme, _, kbps)| *kbps >= budget_kbps(*theme, max_kbps))
+            .map(|(theme, codec, kbps)| format!("{theme:?} {codec:?} at {kbps} kbps"))
+            .collect();
         assert!(
             over_budget.is_empty(),
             "over budget at {width}x{height}: {over_budget:?}"
@@ -904,8 +913,9 @@ mod tests {
     }
 
     /// A moving test picture with everything a soft screen has: a drifting
-    /// two-way gradient, a soft blob, a hard-edged bar, and a patch of
-    /// noise no prediction or transform can afford (it must go out raw).
+    /// two-way gradient, a soft blob, a hard-edged bar, small dots getting
+    /// brighter (split transforms), and a patch of noise no prediction or
+    /// transform can afford (it must go out raw).
     fn soft_test_frame(width: usize, height: usize, time: usize) -> raster::YuvFrame {
         let mut frame = Canvas::new(width, height, Rgb::new(0, 0, 0)).to_yuv420_padded(32);
         let (width, height) = (frame.width, frame.height);
@@ -921,6 +931,9 @@ mod tests {
                 let mut value = 40.0 + 0.35 * fx + 0.2 * fy + 1.5 * t + blob(fx, fy);
                 if (20..28).contains(&y) && x > 40 {
                     value = 235.0;
+                }
+                if (9..12).contains(&(x % 32)) && (41..44).contains(&(y % 64)) {
+                    value = 150.0 + 8.0 * t;
                 }
                 if x < 24 && y >= height - 24 {
                     noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);

@@ -1,24 +1,37 @@
 //! A coding unit's residual as a transform tree (H.265 7.3.8.8 to
 //! 7.3.8.10): one transform block the size of the unit, or the unit split
-//! evenly into four, or sixteen.
+//! evenly into four, sixteen or sixty-four, down to 4x4.
 //!
-//! Small detail (a spark, a dot getting brighter) packs into a few levels
-//! of a 4x4 or 8x8 transform but spreads over most of a 16x16 one, so a
-//! carried-over unit tries the splits and keeps the cheapest. Intra units
-//! never split: their transform blocks would each predict from the one
-//! before, which the encoder doesn't model.
+//! Small detail (a spark, a dot) packs into a few levels of a 4x4 or 8x8
+//! transform but spreads over most of a 16x16 one, so units try the splits
+//! and keep the cheapest. A carried-over unit's prediction is the same
+//! whichever split, so its residual is transformed once per split. An
+//! intra unit's blocks each predict from the ones decoded before them, its
+//! own earlier blocks included, so a split intra unit is coded block by
+//! block, as a decoder rebuilds it, at each QP it tries (and 4x4 luma
+//! blocks take the DST there).
 //!
 //! In 4:2:0 a chroma block is half the luma one's side, but never under
 //! 4x4: luma split to 4x4 shares one 4x4 chroma block per 8x8 area, coded
 //! after the last of its four luma blocks.
 
-use super::super::hevc_residual;
-use super::{Block, PictureCoder, Samples};
+use super::super::fidelity;
+use super::super::hevc_residual::{self, Kernel};
+use super::{read_plane, Block, Corrected, IntraMode, PictureCoder, Plane, Samples};
 
-/// How many times a carried-over unit's transform tree may split
-/// (`max_transform_hierarchy_depth_inter` in the SPS): 16x16 to 4x4, 32x32
-/// to 8x8.
-pub(super) const MAX_INTER_DEPTH: usize = 2;
+/// How many times a unit's transform tree may split (both
+/// `max_transform_hierarchy_depth`s in the SPS): enough for a 32x32 unit
+/// to reach 4x4, the smallest transform. A 16x16 one gets there in two.
+pub(super) const MAX_DEPTH: usize = 3;
+/// Side of the smallest transform block (the SPS's).
+pub(super) const MIN_SIDE: usize = 4;
+
+/// The depths a unit of side `unit` can split to: down to 4x4.
+pub(super) fn depths(unit: usize) -> std::ops::RangeInclusive<usize> {
+    let to_smallest = (unit / MIN_SIDE).trailing_zeros() as usize;
+    0..=to_smallest.min(MAX_DEPTH)
+}
+
 /// Roughly what each transform block's flags cost, to weigh a split by.
 const FLAG_BITS_PER_BLOCK: usize = 2;
 
@@ -70,7 +83,8 @@ pub(super) struct Coefficients {
 
 impl Coefficients {
     /// Transform what `prediction` misses of `source` in the planes
-    /// `needs` names (luma, chroma), split `depth` times.
+    /// `needs` names (luma, chroma), split `depth` times. Always the DCT:
+    /// see `PictureCoder::attempt`.
     pub(super) fn of(
         source: &Samples,
         prediction: &Samples,
@@ -87,7 +101,7 @@ impl Coefficients {
                 .collect();
             split_blocks(&residual, side)
                 .iter()
-                .map(|block| hevc_residual::transform(block, side))
+                .map(|block| hevc_residual::transform(block, side, Kernel::Dct))
                 .collect()
         };
         Self {
@@ -139,17 +153,29 @@ fn z_corner(index: usize, side: usize) -> (usize, usize) {
 }
 
 fn even_bits(value: usize) -> usize {
-    (0..usize::BITS / 2)
-        .map(|bit| ((value >> (2 * bit)) & 1) << bit)
-        .sum()
+    let mut packed = 0;
+    let mut bit = 0;
+    while value >> (2 * bit) != 0 {
+        packed |= ((value >> (2 * bit)) & 1) << bit;
+        bit += 1;
+    }
+    packed
 }
 
-/// The z-order index of the block at column `x`, row `y`.
-fn z_index(x: usize, y: usize) -> usize {
-    (0..usize::BITS / 2)
-        .map(|bit| (((x >> bit) & 1) << (2 * bit)) | (((y >> bit) & 1) << (2 * bit + 1)))
-        .sum()
+/// The z-order index of the block at column `x`, row `y`. It stops at the
+/// highest bit set: intra prediction asks it for every reference sample.
+pub(super) fn z_index(x: usize, y: usize) -> usize {
+    let mut index = 0;
+    let mut bit = 0;
+    while (x | y) >> bit != 0 {
+        index |= (((x >> bit) & 1) << (2 * bit)) | (((y >> bit) & 1) << (2 * bit + 1));
+        bit += 1;
+    }
+    index
 }
+
+/// A block of a split intra unit landed a sample outside the tolerance.
+struct OutOfTolerance;
 
 /// One node of the tree being written: its luma corner inside the unit,
 /// side, depth, and which of its parent's four it is.
@@ -163,6 +189,127 @@ struct Node {
 }
 
 impl PictureCoder<'_> {
+    /// An intra unit's residual with its tree split `depth` times, at `qp`,
+    /// and what a decoder shows for it: block by block in decoding order,
+    /// each predicted in `modes` (luma, chroma) from what is decoded before
+    /// it. Leaves the decoder's picture as it found it. `None` when a
+    /// sample lands outside the tolerance: given up at the first block
+    /// that does, as nothing after it can bring it back.
+    pub(super) fn attempt_intra(
+        &mut self,
+        unit: Block,
+        source: &Samples,
+        modes: [IntraMode; 2],
+        (depth, qp): (usize, i32),
+    ) -> Option<Corrected> {
+        let before = self.read_samples(&self.shown, unit);
+        let residual = self.code_intra_blocks(unit, source, modes, (depth, qp));
+        let shown = self.read_samples(&self.shown, unit);
+        self.write_shown(unit, &before);
+        let residual = residual.ok()?;
+        self.is_close(source, &shown).then(|| Corrected {
+            bits: residual.estimated_bits(),
+            residual,
+            shown,
+            modes: Some(modes),
+        })
+    }
+
+    /// `attempt_intra`'s blocks, in decoding order, into the decoder's
+    /// picture, until one lands outside the tolerance.
+    fn code_intra_blocks(
+        &mut self,
+        unit: Block,
+        source: &Samples,
+        [luma_mode, chroma_mode]: [IntraMode; 2],
+        (depth, qp): (usize, i32),
+    ) -> Result<Residual, OutOfTolerance> {
+        let limit = |samples: &[u8]| fidelity::sample_tolerance(samples, self.tolerance);
+        let luma_limit = limit(&source.luma);
+        let chroma_limits = [limit(&source.chroma[0]), limit(&source.chroma[1])];
+        let (luma_side, _) = block_sides(unit.size, depth);
+        let chroma_qp = hevc_residual::chroma_qp(qp);
+        let mut residual = Residual {
+            qp,
+            depth,
+            luma: Vec::new(),
+            chroma: [Vec::new(), Vec::new()],
+        };
+        for index in 0..(unit.size / luma_side).pow(2) {
+            let (x, y) = z_corner(index, luma_side);
+            let block = Block {
+                x: unit.x + x,
+                y: unit.y + y,
+                size: luma_side,
+            };
+            let levels = self.code_intra_block(block, Plane::Luma, luma_mode, (qp, luma_limit))?;
+            residual.luma.push(levels);
+            // Chroma: this block's own, or with 4x4 luma, after the last
+            // of the four, the one their 8x8 area shares.
+            let chroma_area = match (luma_side, index % 4) {
+                (4, 3) => Block {
+                    x: block.x - 4,
+                    y: block.y - 4,
+                    size: 8,
+                },
+                (4, _) => continue,
+                _ => block,
+            };
+            for (at, plane) in [Plane::Cb, Plane::Cr].into_iter().enumerate() {
+                let bounds = (chroma_qp, chroma_limits[at]);
+                let levels = self.code_intra_block(chroma_area, plane, chroma_mode, bounds)?;
+                residual.chroma[at].push(levels);
+            }
+        }
+        Ok(residual)
+    }
+
+    /// Predict one transform block of `plane` (at `block`, in luma
+    /// samples), quantise what the prediction misses at `qp`, and put the
+    /// block as a decoder rebuilds it into the decoder's picture: later
+    /// blocks predict from it. Its levels, `None` when all are zero; an
+    /// error when a sample lands more than `limit` off.
+    fn code_intra_block(
+        &mut self,
+        block: Block,
+        plane: Plane,
+        mode: IntraMode,
+        (qp, limit): (i32, i32),
+    ) -> Result<Option<Vec<i32>>, OutOfTolerance> {
+        let is_luma = plane == Plane::Luma;
+        let (_, _, side) = plane.scaled(block);
+        let prediction = self.references(block, plane).predict(mode, side, is_luma);
+        let source = read_plane(self.source, block, plane);
+        let missed: Vec<i32> = source
+            .iter()
+            .zip(&prediction)
+            .map(|(s, p)| i32::from(*s) - i32::from(*p))
+            .collect();
+        let kernel = Kernel::of(side, is_luma);
+        let coefficients = hevc_residual::transform(&missed, side, kernel);
+        let levels = hevc_residual::quantize(&coefficients, side, qp);
+        let has_levels = levels.iter().any(|level| *level != 0);
+        let shown: Vec<u8> = if has_levels {
+            let rebuilt = hevc_residual::rebuild(&levels, side, qp, kernel);
+            prediction
+                .iter()
+                .zip(&rebuilt)
+                .map(|(p, r)| (i32::from(*p) + r).clamp(0, 255) as u8)
+                .collect()
+        } else {
+            prediction
+        };
+        let is_too_far = source
+            .iter()
+            .zip(&shown)
+            .any(|(s, d)| i32::from(s.abs_diff(*d)) > limit);
+        if is_too_far {
+            return Err(OutOfTolerance);
+        }
+        self.write_shown_plane(block, plane, &shown);
+        Ok(has_levels.then_some(levels))
+    }
+
     /// transform_tree() of the unit at `block`. With no residual every
     /// coded block flag is 0, which only intra units may send.
     pub(super) fn code_transform_tree(
@@ -197,9 +344,8 @@ impl PictureCoder<'_> {
     /// transform unit.
     fn code_node(&mut self, tree: &Tree, node: Node, parent_chroma: [bool; 2]) {
         let log2 = node.side.trailing_zeros() as usize;
-        let max_depth = if tree.is_inter { MAX_INTER_DEPTH } else { 0 };
         let is_split = node.depth < tree.residual.depth;
-        if log2 > 2 && node.depth < max_depth {
+        if log2 > 2 && node.depth < MAX_DEPTH {
             let ctx = &mut self.contexts.split_transform[5 - log2];
             self.cabac.decision(ctx, is_split);
         } else {
@@ -335,5 +481,13 @@ mod tests {
         assert_eq!(block_sides(16, 1), (8, 4));
         assert_eq!(block_sides(16, 2), (4, 4));
         assert_eq!(block_sides(32, 2), (8, 4));
+        assert_eq!(block_sides(32, 3), (4, 4));
+    }
+
+    #[test]
+    fn units_split_down_to_four_and_no_further() {
+        assert_eq!(depths(32), 0..=3);
+        assert_eq!(depths(16), 0..=2);
+        assert_eq!(depths(8), 0..=1);
     }
 }

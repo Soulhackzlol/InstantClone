@@ -22,14 +22,7 @@ pub fn is_faithful(source: &[u8], shown: &[u8], tolerance: i32) -> bool {
     if tolerance == 0 {
         return source == shown;
     }
-    let (lowest, highest) = source.iter().fold((u8::MAX, u8::MIN), |(low, high), s| {
-        (low.min(*s), high.max(*s))
-    });
-    let tolerance = if highest.saturating_sub(lowest) <= FLAT_SPREAD {
-        tolerance.min(FLAT_TOLERANCE)
-    } else {
-        tolerance
-    };
+    let tolerance = sample_tolerance(source, tolerance);
     let mut total_error = 0i32;
     for (drawn, decoded) in source.iter().zip(shown) {
         let error = i32::from(*decoded) - i32::from(*drawn);
@@ -40,6 +33,20 @@ pub fn is_faithful(source: &[u8], shown: &[u8], tolerance: i32) -> bool {
     }
     // Mean error within half a level.
     total_error.unsigned_abs() as usize * 2 <= source.len()
+}
+
+/// The most any one sample of `source` may be off: the tolerance, or one
+/// level where `source` is flat. An encoder coding a block piece by piece
+/// can give up on it as soon as one piece is further off.
+pub fn sample_tolerance(source: &[u8], tolerance: i32) -> i32 {
+    let (lowest, highest) = source.iter().fold((u8::MAX, u8::MIN), |(low, high), s| {
+        (low.min(*s), high.max(*s))
+    });
+    if highest.saturating_sub(lowest) <= FLAT_SPREAD {
+        tolerance.min(FLAT_TOLERANCE)
+    } else {
+        tolerance
+    }
 }
 
 #[cfg(test)]

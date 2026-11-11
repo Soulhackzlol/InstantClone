@@ -1,5 +1,6 @@
-//! HEVC residuals for the screens with soft detail: the 8, 16 and 32
-//! point transforms, quantisation, the decoder's exact reconstruction
+//! HEVC residuals for the screens with soft detail: the 4 to 32 point
+//! transforms (and the 4 point DST of small intra luma blocks),
+//! quantisation, the decoder's exact reconstruction
 //! (H.265 8.6), and residual_coding() written with CABAC (7.3.8.11).
 //!
 //! As on the H.264 side, the encoder rebuilds every block the way a
@@ -31,13 +32,62 @@ fn basis(size: usize, k: usize, i: usize) -> i64 {
     i64::from(BASIS[k * (32 / size)][i])
 }
 
+/// The transform a block takes (8.6.4.2): the DCT, except a 4x4 block of
+/// an intra unit's luma, which takes the DST. Both scale and shift alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kernel {
+    Dct,
+    Dst,
+}
+
+impl Kernel {
+    /// The kernel of a `size` x `size` block, of intra luma or not.
+    pub fn of(size: usize, is_intra_luma: bool) -> Self {
+        if size == 4 && is_intra_luma {
+            Kernel::Dst
+        } else {
+            Kernel::Dct
+        }
+    }
+
+    /// Row `k` (a frequency), column `i` of the `size`-point matrix.
+    fn entry(self, size: usize, k: usize, i: usize) -> i64 {
+        match self {
+            Kernel::Dct => basis(size, k, i),
+            Kernel::Dst => i64::from(DST_4X4[k][i]),
+        }
+    }
+
+    /// One dimension of the forward transform. The DST is only 4 points,
+    /// so it multiplies by its matrix.
+    fn forward_1d(self, input: &[i64], output: &mut [i64]) {
+        match self {
+            Kernel::Dct => forward_1d(input, output),
+            Kernel::Dst => {
+                for (k, value) in output.iter_mut().enumerate() {
+                    *value = (0..4).map(|i| self.entry(4, k, i) * input[i]).sum();
+                }
+            }
+        }
+    }
+}
+
+/// The 4-point DST's matrix (transMatrix in 8.6.4.2), rows by frequency.
+const DST_4X4: [[i8; 4]; 4] = [
+    [29, 55, 74, 84],
+    [74, 74, 0, -74],
+    [84, -29, -74, 55],
+    [55, -84, 74, -29],
+];
+
 /// The forward transform of a `size` x `size` residual (raster, row by
 /// row): the reference encoder's two passes, whose shifts leave the
 /// coefficients at the scale `QUANT_SCALE` expects. They come back raster
 /// too: `[y * size + x]` has horizontal frequency x and vertical frequency
 /// y. It doesn't depend on the QP, so a block tried at several QPs is
 /// transformed once.
-pub fn transform(residual: &[i32], size: usize) -> Vec<i64> {
+pub fn transform(residual: &[i32], size: usize, kernel: Kernel) -> Vec<i64> {
+    debug_assert!(kernel == Kernel::Dct || size == 4, "the DST is 4x4 only");
     let log2 = size.trailing_zeros() as i64;
     let first_shift = log2 - 1;
     let second_shift = log2 + 6;
@@ -48,7 +98,7 @@ pub fn transform(residual: &[i32], size: usize) -> Vec<i64> {
         for (i, value) in line[..size].iter_mut().enumerate() {
             *value = i64::from(residual[y * size + i]);
         }
-        forward_1d(&line[..size], &mut sums[..size]);
+        kernel.forward_1d(&line[..size], &mut sums[..size]);
         for k in 0..size {
             rows[y * size + k] = (sums[k] + (1 << (first_shift - 1))) >> first_shift;
         }
@@ -58,7 +108,7 @@ pub fn transform(residual: &[i32], size: usize) -> Vec<i64> {
         for (j, value) in line[..size].iter_mut().enumerate() {
             *value = rows[j * size + x];
         }
-        forward_1d(&line[..size], &mut sums[..size]);
+        kernel.forward_1d(&line[..size], &mut sums[..size]);
         for k in 0..size {
             coefficients[k * size + x] = (sums[k] + (1 << (second_shift - 1))) >> second_shift;
         }
@@ -119,7 +169,7 @@ pub fn quantize(coefficients: &[i64], size: usize, qp: i32) -> Vec<i32> {
 }
 
 /// The residual a decoder rebuilds from `levels` (8.6.2 to 8.6.4).
-pub fn rebuild(levels: &[i32], size: usize, qp: i32) -> Vec<i32> {
+pub fn rebuild(levels: &[i32], size: usize, qp: i32, kernel: Kernel) -> Vec<i32> {
     let log2 = size.trailing_zeros() as i64;
     let shift = 8 + log2 - 5;
     let scale = LEVEL_SCALE[(qp % 6) as usize] << (qp / 6);
@@ -142,7 +192,7 @@ pub fn rebuild(levels: &[i32], size: usize, qp: i32) -> Vec<i32> {
         for y in 0..size {
             let sum: i64 = frequencies
                 .iter()
-                .map(|k| basis(size, *k, y) * scaled[k * size + x])
+                .map(|k| kernel.entry(size, *k, y) * scaled[k * size + x])
                 .sum();
             columns[y * size + x] = clip16((sum + 64) >> 7);
         }
@@ -152,7 +202,7 @@ pub fn rebuild(levels: &[i32], size: usize, qp: i32) -> Vec<i32> {
         for x in 0..size {
             let sum: i64 = live_columns
                 .iter()
-                .map(|(k, _)| basis(size, *k, x) * columns[y * size + k])
+                .map(|(k, _)| kernel.entry(size, *k, x) * columns[y * size + k])
                 .sum();
             residual[y * size + x] = ((sum + 2048) >> 12) as i32;
         }
@@ -268,7 +318,9 @@ fn last_position_parts(position: usize) -> (u32, u32, u8) {
 }
 
 /// residual_coding() for one transform block whose `levels` are not all
-/// zero, in the diagonal scan (the only one these block sizes use).
+/// zero, in the diagonal scan. Small intra blocks would take another scan
+/// in the vertical and horizontal modes, so the encoder never splits an
+/// intra unit coded in those (see `hevc::IntraMode::splits`).
 pub fn write(
     cabac: &mut CabacWriter,
     contexts: &mut ResidualContexts,
@@ -604,7 +656,7 @@ mod tests {
             for _ in 0..25 {
                 let residual: Vec<i32> = (0..size * size).map(|_| sample()).collect();
                 assert_eq!(
-                    transform(&residual, size),
+                    transform(&residual, size, Kernel::Dct),
                     transform_by_matrix(&residual, size),
                     "{size}x{size}"
                 );
@@ -617,19 +669,23 @@ mod tests {
     /// scaling agree.
     #[test]
     fn a_ramp_survives_a_fine_quantiser() {
-        for size in [8, 16, 32] {
+        let kernels = [4, 8, 16, 32]
+            .map(|size| (size, Kernel::Dct))
+            .into_iter()
+            .chain([(4, Kernel::Dst)]);
+        for (size, kernel) in kernels {
             let residual: Vec<i32> = (0..size * size)
                 .map(|at| (at % size) as i32 * 2 - (at / size) as i32 + 7)
                 .collect();
-            let levels = quantize(&transform(&residual, size), size, 4);
-            let rebuilt = rebuild(&levels, size, 4);
+            let levels = quantize(&transform(&residual, size, kernel), size, 4);
+            let rebuilt = rebuild(&levels, size, 4, kernel);
             let worst = residual
                 .iter()
                 .zip(&rebuilt)
                 .map(|(a, b)| (a - b).abs())
                 .max()
                 .unwrap();
-            assert!(worst <= 1, "{size}x{size}: worst error {worst}");
+            assert!(worst <= 1, "{kernel:?} {size}x{size}: worst error {worst}");
         }
     }
 }
