@@ -156,11 +156,32 @@ fn screen_style(settings: &CrashProtection) -> ScreenStyle<'_> {
     }
 }
 
-/// Render and encode the screen described by `settings` at `shape`.
+/// Render and encode the screen described by `settings` at `shape`, its
+/// keyframe intervals side by side on their own threads.
 pub fn build_loop(
     settings: &CrashProtection,
     shape: StreamShape,
     codec: SlateCodec,
+) -> Result<SlateLoop, UnsupportedShape> {
+    build_intervals(settings, shape, codec, true)
+}
+
+/// `build_loop` one interval after another on the calling thread, for a
+/// build nothing waits on: a few times slower, but never more than one core
+/// taken from OBS and the game while the streamer is live.
+pub fn build_loop_quietly(
+    settings: &CrashProtection,
+    shape: StreamShape,
+    codec: SlateCodec,
+) -> Result<SlateLoop, UnsupportedShape> {
+    build_intervals(settings, shape, codec, false)
+}
+
+fn build_intervals(
+    settings: &CrashProtection,
+    shape: StreamShape,
+    codec: SlateCodec,
+    is_parallel: bool,
 ) -> Result<SlateLoop, UnsupportedShape> {
     let side_ok = |side: usize| (MIN_SIDE..=MAX_SIDE).contains(&side) && side.is_multiple_of(2);
     if !side_ok(shape.width) || !side_ok(shape.height) || !(1..=MAX_FPS).contains(&shape.fps) {
@@ -175,6 +196,12 @@ pub fn build_loop(
         loop_frames: count * frames,
         tolerance: settings.theme.tolerance(),
     };
+    if !is_parallel {
+        let intervals = (0..count)
+            .map(|index| encode_interval(&style, shape, codec, plan(index)))
+            .collect();
+        return Ok(SlateLoop { intervals, shape });
+    }
     let intervals = std::thread::scope(|scope| {
         let style = &style;
         let workers: Vec<_> = (0..count)
@@ -442,35 +469,56 @@ mod tests {
     /// under twice that and one of fine moving detail under four times:
     /// light that moves everywhere costs more than a few moving shapes, and
     /// dots and sparks more than light. Even four times stays well under
-    /// the stream the screen stands in for, whose upload it uses.
+    /// the stream the screen stands in for, whose upload it uses. The loops
+    /// build side by side, each on one thread as the app builds them.
     fn assert_every_theme_fits(width: usize, height: usize, max_kbps: usize) {
         let shape = StreamShape {
             width,
             height,
             fps: crate::crash_hold::SLATE_FPS,
         };
-        let every_pair = SlateTheme::ALL
+        let every_pair: Vec<(SlateTheme, SlateCodec)> = SlateTheme::ALL
             .into_iter()
-            .flat_map(|theme| CODECS.map(|codec| (theme, codec)));
-        for (theme, codec) in every_pair {
-            let slate = build_loop(&settings(theme), shape, codec).unwrap();
-            let loop_bytes: usize = slate
-                .intervals
+            .flat_map(|theme| CODECS.map(|codec| (theme, codec)))
+            .collect();
+        let over_budget: Vec<String> = std::thread::scope(|scope| {
+            let builds: Vec<_> = every_pair
                 .iter()
-                .map(|i| i.keyframes[0].len() + i.deltas.iter().map(Vec::len).sum::<usize>())
-                .sum();
-            let loop_ms = slate.intervals.len() * KEYFRAME_INTERVAL_MS;
-            // Bits per millisecond are kbps.
-            let kbps = loop_bytes * 8 / loop_ms;
-            let budget = match theme {
-                SlateTheme::Halftone | SlateTheme::Lattice | SlateTheme::Embers => 4 * max_kbps,
-                _ if theme.is_soft() => 2 * max_kbps,
-                _ => max_kbps,
-            };
-            assert!(
-                kbps < budget,
-                "{theme:?} {codec:?} loop at {width}x{height} runs at {kbps} kbps"
-            );
+                .map(|&(theme, codec)| {
+                    scope.spawn(move || {
+                        let slate = build_loop_quietly(&settings(theme), shape, codec).unwrap();
+                        (theme, codec, loop_kbps(&slate))
+                    })
+                })
+                .collect();
+            builds
+                .into_iter()
+                .map(|build| build.join().expect("a loop build panicked"))
+                .filter(|(theme, _, kbps)| *kbps >= budget_kbps(*theme, max_kbps))
+                .map(|(theme, codec, kbps)| format!("{theme:?} {codec:?} at {kbps} kbps"))
+                .collect()
+        });
+        assert!(
+            over_budget.is_empty(),
+            "over budget at {width}x{height}: {over_budget:?}"
+        );
+    }
+
+    fn loop_kbps(slate: &SlateLoop) -> usize {
+        let loop_bytes: usize = slate
+            .intervals
+            .iter()
+            .map(|i| i.keyframes[0].len() + i.deltas.iter().map(Vec::len).sum::<usize>())
+            .sum();
+        // Bits per millisecond are kbps.
+        loop_bytes * 8 / (slate.intervals.len() * KEYFRAME_INTERVAL_MS)
+    }
+
+    fn budget_kbps(theme: SlateTheme, max_kbps: usize) -> usize {
+        match theme {
+            SlateTheme::Halftone | SlateTheme::Lattice | SlateTheme::Embers => 4 * max_kbps,
+            _ if theme.is_soft() => 2 * max_kbps,
+            _ => max_kbps,
         }
     }
 

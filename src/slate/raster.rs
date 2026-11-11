@@ -100,24 +100,32 @@ impl Canvas {
             }
         }
         let step = 1.0 / cell as f32;
+        // Each pixel row first blends the two grid rows around it, once per
+        // grid column; the pixels then only blend across. Doing both per
+        // pixel was most of the time a frame of light took to paint.
+        let mut line = vec![[0.0f32; 3]; columns];
         for y in 0..self.height {
             let (row, down) = (y / cell, (y % cell) as f32 * step);
-            for x in 0..self.width {
-                let (column, across) = (x / cell, (x % cell) as f32 * step);
-                let corner = row * columns + column;
-                let corners = [
-                    grid[corner],
-                    grid[corner + 1],
-                    grid[corner + columns],
-                    grid[corner + columns + 1],
-                ];
-                let channel = |index: usize| {
-                    let top = corners[0][index] + (corners[1][index] - corners[0][index]) * across;
-                    let bottom =
-                        corners[2][index] + (corners[3][index] - corners[2][index]) * across;
-                    (top + (bottom - top) * down).round().clamp(0.0, 255.0) as u8
-                };
-                self.pixels[y * self.width + x] = Rgb::new(channel(0), channel(1), channel(2));
+            let (above, below) = (&grid[row * columns..], &grid[(row + 1) * columns..]);
+            for (column, blended) in line.iter_mut().enumerate() {
+                *blended = std::array::from_fn(|channel| {
+                    let top = above[column][channel];
+                    top + (below[column][channel] - top) * down
+                });
+            }
+            let pixels = &mut self.pixels[y * self.width..(y + 1) * self.width];
+            for (column, span) in pixels.chunks_mut(cell).enumerate() {
+                let (left, right) = (line[column], line[column + 1]);
+                for (offset, pixel) in span.iter_mut().enumerate() {
+                    let across = offset as f32 * step;
+                    // Clamped first, so adding a half and truncating rounds
+                    // like `round` does, without its library call.
+                    let channel = |index: usize| {
+                        let value = left[index] + (right[index] - left[index]) * across;
+                        (value.clamp(0.0, 255.0) + 0.5) as u8
+                    };
+                    *pixel = Rgb::new(channel(0), channel(1), channel(2));
+                }
             }
         }
     }
@@ -224,25 +232,23 @@ impl Canvas {
     }
 
     /// Coded luma rows `2 * pair` and `2 * pair + 1`, and chroma row
-    /// `pair`. Neighbouring pixels are usually the same colour, so each
-    /// conversion is reused until the colour changes.
+    /// `pair`. Columns past the canvas repeat its right edge.
     fn convert_row_pair(&self, frame: &mut YuvFrame, pair: usize) {
+        let tables = &*BT709;
         let coded_width = frame.width;
         let rows = [self.row(2 * pair), self.row(2 * pair + 1)];
-        let at = |row: &[Rgb], x: usize| row[x.min(self.width - 1)];
         for (offset, row) in rows.iter().enumerate() {
             let start = (2 * pair + offset) * coded_width;
-            let mut last = (row[0], luma(row[0]));
-            for (x, sample) in frame.y[start..start + coded_width].iter_mut().enumerate() {
-                let pixel = at(row, x);
-                if pixel != last.0 {
-                    last = (pixel, luma(pixel));
-                }
-                *sample = last.1;
+            let line = &mut frame.y[start..start + coded_width];
+            for (sample, pixel) in line.iter_mut().zip(row.iter()) {
+                *sample = luma(tables, *pixel);
             }
+            let edge = line[self.width - 1];
+            line[self.width..].fill(edge);
         }
         let chroma_width = coded_width / 2;
-        let mut last: Option<([Rgb; 4], (u8, u8))> = None;
+        let at = |row: &[Rgb], x: usize| row[x.min(self.width - 1)];
+        let start = pair * chroma_width;
         for cx in 0..chroma_width {
             let quad = [
                 at(rows[0], 2 * cx),
@@ -250,16 +256,7 @@ impl Canvas {
                 at(rows[1], 2 * cx),
                 at(rows[1], 2 * cx + 1),
             ];
-            let (u, v) = match last {
-                Some((seen, samples)) if seen == quad => samples,
-                _ => {
-                    let samples = chroma_samples(quad);
-                    last = Some((quad, samples));
-                    samples
-                }
-            };
-            frame.u[pair * chroma_width + cx] = u;
-            frame.v[pair * chroma_width + cx] = v;
+            (frame.u[start + cx], frame.v[start + cx]) = chroma_samples(tables, quad);
         }
     }
 
@@ -320,44 +317,69 @@ impl YuvFrame {
 
 // BT.709 coefficients, limited range: the colour space OBS streams in by
 // default, and what the SPS VUI advertises.
-const KR: f32 = 0.2126;
-const KB: f32 = 0.0722;
+const KR: f64 = 0.2126;
+const KB: f64 = 0.0722;
+/// Fixed point: the conversion runs on every pixel of every frame, and
+/// table lookups in integers take a fraction of the float arithmetic.
+const FRACTION_BITS: u32 = 16;
 
-fn luma_linear(color: Rgb) -> f32 {
-    let (r, g, b) = (color.r as f32, color.g as f32, color.b as f32);
-    KR * r + (1.0 - KR - KB) * g + KB * b
+/// Each channel's share of Y, U and V by its value, in 16.16 fixed point:
+/// the conversion is linear, so a pixel's samples are sums of three.
+struct Bt709 {
+    /// [channel][value], channels red, green, blue.
+    y: [[i32; 256]; 3],
+    u: [[i32; 256]; 3],
+    v: [[i32; 256]; 3],
 }
 
-fn luma(color: Rgb) -> u8 {
-    to_sample(16.0 + luma_linear(color) * 219.0 / 255.0)
+static BT709: std::sync::LazyLock<Bt709> = std::sync::LazyLock::new(|| {
+    let kg = 1.0 - KR - KB;
+    // Y' = Kr R + Kg G + Kb B, U = (B - Y') / 2(1 - Kb), V = (R - Y') /
+    // 2(1 - Kr); then scaled to the 219 and 224 levels of limited range.
+    let y_weights = [KR, kg, KB].map(|k| k * 219.0 / 255.0);
+    let u_scale = 224.0 / 255.0 / (2.0 * (1.0 - KB));
+    let v_scale = 224.0 / 255.0 / (2.0 * (1.0 - KR));
+    let u_weights = [-KR * u_scale, -kg * u_scale, (1.0 - KB) * u_scale];
+    let v_weights = [(1.0 - KR) * v_scale, -kg * v_scale, -KB * v_scale];
+    let table = |weights: [f64; 3]| {
+        weights.map(|weight| {
+            std::array::from_fn(|value| {
+                (weight * value as f64 * f64::from(1 << FRACTION_BITS)).round() as i32
+            })
+        })
+    };
+    Bt709 {
+        y: table(y_weights),
+        u: table(u_weights),
+        v: table(v_weights),
+    }
+});
+
+/// A pixel's share in one plane's `table`.
+fn share(table: &[[i32; 256]; 3], color: Rgb) -> i32 {
+    table[0][usize::from(color.r)] + table[1][usize::from(color.g)] + table[2][usize::from(color.b)]
+}
+
+fn luma(tables: &Bt709, color: Rgb) -> u8 {
+    to_sample(16, share(&tables.y, color), 0)
 }
 
 /// U and V samples for a 2x2 block of pixels: their chroma, averaged.
-fn chroma_samples(quad: [Rgb; 4]) -> (u8, u8) {
-    let (mut u_sum, mut v_sum) = (0.0, 0.0);
-    for pixel in quad {
-        let (u, v) = chroma(pixel);
-        u_sum += u;
-        v_sum += v;
-    }
+fn chroma_samples(tables: &Bt709, quad: [Rgb; 4]) -> (u8, u8) {
+    let sum = |table| quad.iter().map(|pixel| share(table, *pixel)).sum::<i32>();
     (
-        to_sample(128.0 + u_sum / 4.0),
-        to_sample(128.0 + v_sum / 4.0),
+        to_sample(128, sum(&tables.u), 2),
+        to_sample(128, sum(&tables.v), 2),
     )
 }
 
-/// Chroma offsets from 128, before averaging.
-fn chroma(color: Rgb) -> (f32, f32) {
-    let y = luma_linear(color);
-    let u = (color.b as f32 - y) / (2.0 * (1.0 - KB)) * 224.0 / 255.0;
-    let v = (color.r as f32 - y) / (2.0 * (1.0 - KR)) * 224.0 / 255.0;
-    (u, v)
-}
-
-/// Round into 1..=254: 0 and 255 are never needed in limited range, and
+/// `offset` plus a fixed-point `sum` of 2^`average_bits` shares averaged,
+/// rounded into 1..=254: 0 and 255 are never needed in limited range, and
 /// keeping clear of 0 keeps I_PCM samples valid for strict decoders.
-fn to_sample(value: f32) -> u8 {
-    value.round().clamp(1.0, 254.0) as u8
+fn to_sample(offset: i32, sum: i32, average_bits: u32) -> u8 {
+    let shift = FRACTION_BITS + average_bits;
+    let value = ((offset << shift) + sum + (1 << (shift - 1))) >> shift;
+    value.clamp(1, 254) as u8
 }
 
 #[cfg(test)]

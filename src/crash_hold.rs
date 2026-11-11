@@ -867,6 +867,17 @@ impl SlateCache {
         shape: StreamShape,
         codec: SlateCodec,
     ) -> Option<Arc<SlateLoop>> {
+        self.get_or_build(settings, shape, codec, Urgency::Now)
+            .await
+    }
+
+    async fn get_or_build(
+        self: &Arc<Self>,
+        settings: &CrashProtection,
+        shape: StreamShape,
+        codec: SlateCodec,
+        urgency: Urgency,
+    ) -> Option<Arc<SlateLoop>> {
         const BUILD_POLL: Duration = Duration::from_millis(50);
         let key = slate_key(settings, shape, codec);
         loop {
@@ -884,7 +895,7 @@ impl SlateCache {
         let cache = self.clone();
         let settings = settings.clone();
         let task = tokio::spawn(async move {
-            let slate = build(settings.clone(), shape, codec).await;
+            let slate = build(settings.clone(), shape, codec, urgency).await;
             if let Some(slate) = &slate {
                 cache.ready.lock().insert(key, (settings, slate.clone()));
             }
@@ -919,7 +930,9 @@ impl SlateCache {
     }
 
     /// Start building the loop for `shape` in `codec` in the background,
-    /// unless it is ready or already being built.
+    /// unless it is ready or already being built. A soft theme's loop
+    /// builds quietly: nothing waits on it (a hold plays its stand-in
+    /// meanwhile), and the streamer is usually live while it builds.
     pub fn prebuild(
         self: &Arc<Self>,
         settings: &CrashProtection,
@@ -930,10 +943,15 @@ impl SlateCache {
         if self.cached(settings, key).is_some() || self.building.lock().contains(&key) {
             return;
         }
+        let urgency = if settings.theme.is_soft() {
+            Urgency::Quietly
+        } else {
+            Urgency::Now
+        };
         let cache = self.clone();
         let settings = settings.clone();
         tokio::spawn(async move {
-            cache.get(&settings, shape, codec).await;
+            cache.get_or_build(&settings, shape, codec, urgency).await;
         });
     }
 
@@ -943,16 +961,36 @@ impl SlateCache {
     }
 }
 
+/// How soon a loop is needed.
+#[derive(Debug, Clone, Copy)]
+enum Urgency {
+    /// Something waits on it: every core it can use.
+    Now,
+    /// Nothing waits: one core, and one such build at a time.
+    Quietly,
+}
+
+/// Held by the quiet build running now, so a crash loop and a transition
+/// loop (or two destinations' sizes) never build side by side.
+static QUIET_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Encode a loop off the async runtime.
 async fn build(
     settings: CrashProtection,
     shape: StreamShape,
     codec: SlateCodec,
+    urgency: Urgency,
 ) -> Option<Arc<SlateLoop>> {
     tokio::task::spawn_blocking(move || {
-        crate::slate::build_loop(&settings, shape, codec)
-            .ok()
-            .map(Arc::new)
+        let built = match urgency {
+            Urgency::Now => crate::slate::build_loop(&settings, shape, codec),
+            Urgency::Quietly => {
+                // A build that panicked held it last; the lock guards no data.
+                let _turn = QUIET_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+                crate::slate::build_loop_quietly(&settings, shape, codec)
+            }
+        };
+        built.ok().map(Arc::new)
     })
     .await
     .ok()
