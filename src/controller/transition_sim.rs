@@ -37,8 +37,20 @@ fn either_side(frames: &[Frame], at: Instant) -> (Frame, Frame) {
     )
 }
 
-/// The delay goes on: viewers see the screen instead of the last seconds
-/// again, then the stream from where they were, the delay behind.
+/// The frames either side of the first screen after `from`: the stream
+/// airs on to its next keyframe, then the screen leaves a gap.
+fn around_the_screen(frames: &[Frame], from: Instant) -> (Frame, Frame) {
+    let after: Vec<Frame> = frames.iter().copied().filter(|f| f.at > from).collect();
+    let gap = after
+        .windows(2)
+        .position(|pair| pair[1].at.duration_since(pair[0].at).as_millis() > 500)
+        .expect("the screen left a gap in the stream");
+    (after[gap], after[gap + 1])
+}
+
+/// The delay goes on: viewers see the screen (from the stream's next
+/// keyframe) instead of the last seconds again, then the stream from that
+/// same keyframe, the delay behind.
 #[tokio::test]
 async fn a_delay_turned_on_plays_the_screen_and_goes_on_from_where_viewers_were() {
     const DELAY_MS: u32 = 1_500;
@@ -52,22 +64,27 @@ async fn a_delay_turned_on_plays_the_screen_and_goes_on_from_where_viewers_were(
 
     let frames = sim.frames(0);
     assert_strictly_increasing(&frames, "through the transition");
-    let (last_live, first_back) = either_side(&frames, activated);
+    let (last_live, first_back) = around_the_screen(&frames, activated);
+    let paused_after = last_live.at.duration_since(activated).as_millis() as u32;
+    assert!(
+        paused_after <= GOP_FRAMES * super::sim::FRAME_MS + TIMER_SLOP_MS,
+        "the screen came {paused_after} ms after the delay turned on"
+    );
     let screen = sim.screen_tags(0, last_live.at, first_back.at);
     assert!(
         screen >= 30,
         "the screen covered the wait ({screen} frames)"
     );
     assert!(first_back.keyframe, "back on a keyframe");
+    assert_eq!(
+        first_back.number,
+        last_live.number + 1,
+        "back on the very next frame: nothing skipped"
+    );
     let delayed_by = sim.delay_ms(&first_back);
     assert!(
         delayed_by + TIMER_SLOP_MS >= DELAY_MS,
         "back {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
-    );
-    let passed_over = first_back.number - last_live.number - 1;
-    assert!(
-        passed_over < GOP_FRAMES,
-        "{passed_over} frames passed over, more than a keyframe interval"
     );
     assert!(!sim.ended(0), "the session went on");
     sim.assert_timestamps_monotonic(0);
@@ -108,14 +125,8 @@ async fn raising_the_delay_plays_the_screen_for_the_difference() {
 
     let frames = sim.frames(0);
     assert_strictly_increasing(&frames, "through both transitions");
-    // The stream runs on at the old delay until the pump's next cut check,
-    // then the screen leaves a gap: the frame after the gap is the return.
-    let after_raise: Vec<Frame> = frames.iter().copied().filter(|f| f.at > raised).collect();
-    let gap = after_raise
-        .windows(2)
-        .position(|pair| pair[1].at.duration_since(pair[0].at).as_millis() > 500)
-        .expect("the screen left a gap in the stream");
-    let first_back = after_raise[gap + 1];
+    let (last_before, first_back) = around_the_screen(&frames, raised);
+    assert_eq!(first_back.number, last_before.number + 1, "nothing skipped");
     let delayed_by = sim.delay_ms(&first_back);
     assert!(
         delayed_by + TIMER_SLOP_MS >= RAISED_MS,

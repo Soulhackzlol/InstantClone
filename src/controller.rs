@@ -3819,6 +3819,20 @@ async fn pump_dest(
                 .await?;
                 continue;
             }
+            // The delay transition was waiting for a keyframe to pause on:
+            // this is it, if the delay still needs to go back.
+            if state.transition_at_next_keyframe && meta.is_idr {
+                state.transition_at_next_keyframe = false;
+                let still_due =
+                    compute_delay_cut(ctrl, &meta).is_some_and(|cut| cut.target.seq < meta.seq);
+                if still_due && crate::crash_hold::transition_covers(ctrl, dest) {
+                    match transition_into_delay(ctrl, dest, &mut sink, &mut state, meta).await? {
+                        Transition::Played => continue,
+                        Transition::Ended => return Ok(()),
+                        Transition::Unavailable => {}
+                    }
+                }
+            }
             let target_now = ctrl.target_delay_ms();
             let due = target_now != state.last_seen_target
                 || state.last_cut_check.elapsed() >= Duration::from_millis(500);
@@ -3833,18 +3847,15 @@ async fn pump_dest(
                 if let Some(cut) = compute_delay_cut(ctrl, &meta) {
                     // A delay turned on or raised takes viewers back in
                     // time. With the transition on they see its screen
-                    // instead, and the stream goes on from here.
+                    // instead, from the next keyframe (the stream airs on
+                    // until then), and the stream goes on from there.
                     let goes_back = cut.target.seq < meta.seq;
                     if goes_back && crate::crash_hold::transition_covers(ctrl, dest) {
-                        match transition_into_delay(ctrl, dest, &mut sink, &mut state, meta).await?
-                        {
-                            Transition::Played => continue,
-                            Transition::Ended => return Ok(()),
-                            Transition::Unavailable => {}
-                        }
+                        state.transition_at_next_keyframe = true;
+                    } else {
+                        apply_cut(ctrl, dest, &mut sink, &mut state, cut).await?;
+                        continue;
                     }
-                    apply_cut(ctrl, dest, &mut sink, &mut state, cut).await?;
-                    continue;
                 }
             }
             pace_and_send(&mut sink, &mut state, &meta, ctrl, dest, &mut io_buf).await?;
@@ -3866,10 +3877,10 @@ enum Transition {
 }
 
 /// The delay is about to take viewers back in time: play the transition
-/// screen from where they are (`paused`, the next tag this pump would
-/// send) until the delay has built up behind it, then rejoin there.
-/// Nothing is replayed and nothing is missed: the stream is the delay
-/// later than it was.
+/// screen from where they are (`paused`, the keyframe this pump would
+/// send next) until the delay has built up behind it, then rejoin on that
+/// keyframe. Nothing is replayed and nothing is missed: the stream is the
+/// delay later than it was.
 async fn transition_into_delay(
     ctrl: &Arc<Controller>,
     dest: &Arc<DestinationState>,
@@ -3998,6 +4009,10 @@ struct EgressState {
     // --- cut-check throttling ---
     last_cut_check: Instant,
     last_seen_target: u32,
+    /// A delay that would take viewers back is waiting for the next
+    /// keyframe: the transition screen starts there, so the stream can
+    /// resume on that same keyframe, with nothing skipped or repeated.
+    transition_at_next_keyframe: bool,
     /// Vertical egress only: after a (re)seed we may be pointed mid-GOP of
     /// the vertical canvas (the cut/seed index is built from the HORIZONTAL
     /// primary's keyframes). Emitting the vertical canvas's P-frames before
@@ -4020,6 +4035,7 @@ impl EgressState {
             last_publisher_token: 0,
             last_cut_check: now,
             last_seen_target: 0,
+            transition_at_next_keyframe: false,
             awaiting_keyframe: true,
         }
     }
