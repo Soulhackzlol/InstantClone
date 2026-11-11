@@ -8,12 +8,14 @@
 
 mod bitstream;
 mod cabac;
+mod cavlc_tables;
 mod encoder;
 mod font;
 mod hevc;
 mod pixel_font;
 mod png;
 mod raster;
+mod residual;
 mod themes;
 
 pub use encoder::StreamShape;
@@ -743,6 +745,104 @@ mod tests {
             result.status
         );
         decoded
+    }
+
+    /// A moving test picture with everything a soft screen has: a drifting
+    /// two-way gradient, a soft blob, a hard-edged bar, and a patch of
+    /// noise no prediction or transform can afford (it must go out raw).
+    fn soft_test_frame(width: usize, height: usize, time: usize) -> raster::YuvFrame {
+        let mut frame = Canvas::new(width, height, Rgb::new(0, 0, 0)).to_yuv420_padded(32);
+        let (width, height) = (frame.width, frame.height);
+        let t = time as f32;
+        let blob = |x: f32, y: f32| {
+            let (dx, dy) = (x - width as f32 * 0.6 - 3.0 * t, y - height as f32 * 0.4);
+            90.0 * (-(dx * dx + dy * dy) / 900.0).exp()
+        };
+        let mut noise = 0x2545_F491u32;
+        for y in 0..height {
+            for x in 0..width {
+                let (fx, fy) = (x as f32, y as f32);
+                let mut value = 40.0 + 0.35 * fx + 0.2 * fy + 1.5 * t + blob(fx, fy);
+                if (20..28).contains(&y) && x > 40 {
+                    value = 235.0;
+                }
+                if x < 24 && y >= height - 24 {
+                    noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    value = (noise >> 24) as f32;
+                }
+                frame.y[y * width + x] = value.clamp(16.0, 235.0) as u8;
+            }
+        }
+        for y in 0..height / 2 {
+            for x in 0..width / 2 {
+                let at = y * (width / 2) + x;
+                frame.u[at] = (128.0 + 0.25 * x as f32 - 0.5 * t).clamp(16.0, 240.0) as u8;
+                frame.v[at] = (110.0 + 0.3 * y as f32 + blob(2.0 * x as f32, 2.0 * y as f32) / 3.0)
+                    .clamp(16.0, 240.0) as u8;
+            }
+        }
+        frame
+    }
+
+    fn frame_bytes(frame: &raster::YuvFrame) -> Vec<u8> {
+        [&frame.y[..], &frame.u[..], &frame.v[..]].concat()
+    }
+
+    fn worst_difference(a: &raster::YuvFrame, b: &raster::YuvFrame) -> u8 {
+        frame_bytes(a)
+            .iter()
+            .zip(frame_bytes(b))
+            .map(|(a, b)| a.abs_diff(b))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Soft pictures are coded with residual, so the encoder has to rebuild
+    /// each block exactly as a decoder will: every later prediction and
+    /// skip leans on it. Decode with ffmpeg and require its pixels to be
+    /// the encoder's own, and those to stay within the tolerance.
+    #[test]
+    fn ffmpeg_shows_exactly_what_the_h264_encoder_thinks_it_shows() {
+        if !ffmpeg_is_available("the soft screen decode round trip") {
+            return;
+        }
+        for (width, height, tolerance) in [(64, 64, 2), (320, 192, 1), (320, 192, 3)] {
+            let shape = StreamShape {
+                width,
+                height,
+                fps: 10,
+            };
+            let sets = encoder::parameter_sets(shape);
+            let first = soft_test_frame(width, height, 0);
+            let idr = encoder::encode_idr_within(&first, 0, tolerance);
+            let what = format!("{width}x{height} within {tolerance}");
+            assert!(
+                worst_difference(&first, &idr.shown) <= tolerance,
+                "{what}: keyframe"
+            );
+            let mut samples = vec![bitstream::length_prefixed(&[
+                &sets.sps, &sets.pps, &idr.nal,
+            ])];
+            let mut expected = frame_bytes(&idr.shown);
+            let mut shown = idr.shown;
+            for time in 1..8 {
+                let frame = soft_test_frame(width, height, time);
+                let coded = encoder::encode_p_within(&frame, &shown, time as u32, tolerance);
+                assert!(
+                    worst_difference(&frame, &coded.shown) <= tolerance,
+                    "{what}: picture {time}"
+                );
+                samples.push(bitstream::length_prefixed(&[&coded.nal]));
+                expected.extend(frame_bytes(&coded.shown));
+                shown = coded.shown;
+            }
+            let stream = annex_b_samples(samples.iter());
+            let decoded =
+                decode_with_ffmpeg(&stream, shape.fps, SlateCodec::H264, SlateTheme::Whisper);
+            assert_eq!(decoded.len(), expected.len(), "{what}: frame count");
+            let first_wrong = decoded.iter().zip(&expected).position(|(a, b)| a != b);
+            assert_eq!(first_wrong, None, "{what}: first differing sample");
+        }
     }
 
     /// The rendered frames, cropped to the visible size, twice over.

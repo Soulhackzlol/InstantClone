@@ -53,6 +53,19 @@ impl BitWriter {
         self.ue(mapped);
     }
 
+    /// How many bits have been written.
+    pub fn bit_len(&self) -> usize {
+        self.bytes.len() * 8 + usize::from(self.filled)
+    }
+
+    /// Every bit of `other`, in order, after this writer's own.
+    pub fn append(&mut self, other: &BitWriter) {
+        for byte in &other.bytes {
+            self.bits(u32::from(*byte), 8);
+        }
+        self.bits(u32::from(other.current), other.filled);
+    }
+
     /// Zero bits up to the next byte boundary (pcm_alignment_zero_bit).
     pub fn align_with_zeros(&mut self) {
         while self.filled != 0 {

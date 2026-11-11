@@ -1,21 +1,29 @@
-//! Lossless H.264 encoder for flat-colour screens.
+//! H.264 encoder for the screens InstantClone draws itself.
 //!
-//! Only needs three macroblock types, which is what keeps it small:
-//! - I_16x16 with no residual: the block is an exact copy of a vertical,
-//!   horizontal or DC prediction from its neighbours (flat areas).
-//! - I_PCM: the 384 raw samples, for anything with detail.
-//! - P_Skip: unchanged since the previous frame.
+//! It needs four macroblock types, which is what keeps it small:
+//! - I_16x16 with no residual: the block is a vertical, horizontal, DC or
+//!   plane prediction from its neighbours (flat areas, even ramps).
+//! - I_16x16 with residual: a prediction plus transform coefficients, for
+//!   soft detail (gradients, glows). Only screens that allow a tolerance
+//!   use it.
+//! - I_PCM: the 384 raw samples, for anything else.
+//! - P_Skip: close enough to the previous frame already.
 //!
-//! Every macroblock reconstructs to exactly its source samples, so later
-//! predictions can read the source frame as if it were the decoder's
-//! output. Deblocking is switched off in every slice so nothing touches
-//! the reconstruction afterwards.
+//! A screen coded with tolerance 0 is lossless: every macroblock
+//! reconstructs to exactly its source samples. With a tolerance, every
+//! sample lands within that many levels of its source, and the encoder
+//! keeps the picture a decoder really shows, so predictions and skips are
+//! judged against that, never against the source. Deblocking is switched
+//! off in every slice so nothing touches the reconstruction afterwards.
 //!
 //! Stream shape: Constrained Baseline, CAVLC, one slice per picture, a
 //! single reference frame, POC type 2 (output order = decode order).
 
 use super::bitstream::{self, BitWriter};
 use super::raster::YuvFrame;
+use super::residual::{
+    self, ChromaLevels, LevelTooLarge, LumaLevels, TokenTable, LUMA_BLOCK_AT, ZIGZAG,
+};
 
 const MB: usize = 16;
 const CHROMA_MB: usize = 8;
@@ -162,9 +170,21 @@ fn pps_rbsp() -> Vec<u8> {
     w.finish()
 }
 
-/// IDR picture. Consecutive IDRs must differ in `idr_pic_id`, so a loop
-/// that replays its keyframe alternates between two ids.
+/// A coded picture, and the picture a decoder shows for it, which is what
+/// the next picture is coded against.
+pub struct Coded {
+    pub nal: Vec<u8>,
+    pub shown: YuvFrame,
+}
+
+/// IDR picture, exact. Consecutive IDRs must differ in `idr_pic_id`, so a
+/// loop that replays its keyframe alternates between two ids.
 pub fn encode_idr(frame: &YuvFrame, idr_pic_id: u32) -> Vec<u8> {
+    encode_idr_within(frame, idr_pic_id, 0).nal
+}
+
+/// IDR picture whose every sample lands within `tolerance` of `frame`.
+pub fn encode_idr_within(frame: &YuvFrame, idr_pic_id: u32, tolerance: u8) -> Coded {
     let mut w = BitWriter::new();
     w.ue(0); // first_mb_in_slice
     w.ue(SLICE_TYPE_I);
@@ -174,18 +194,32 @@ pub fn encode_idr(frame: &YuvFrame, idr_pic_id: u32) -> Vec<u8> {
     w.bit(false); // no_output_of_prior_pics_flag
     w.bit(false); // long_term_reference_flag
     write_slice_tail(&mut w);
-    let mut coder = MacroblockCoder::new(frame);
+    let mut coder = PictureCoder::new(frame, None, tolerance);
     for index in 0..coder.mb_count() {
-        let coding = choose_intra(frame, coder.position(index));
-        coder.write(&mut w, index, coding, 0);
+        coder.code_intra(&mut w, index, 0);
     }
-    bitstream::nal_unit(3, bitstream::NAL_IDR_SLICE, &w.finish())
+    Coded {
+        nal: bitstream::nal_unit(3, bitstream::NAL_IDR_SLICE, &w.finish()),
+        shown: coder.shown,
+    }
 }
 
-/// P picture: blocks identical to `previous` are skipped, the rest are
-/// intra coded. Every P picture is a reference so the next one can skip
-/// against it; `frame_num` counts up from 1 after the IDR.
+/// P picture, exact: blocks identical to `previous` are skipped, the rest
+/// are intra coded. Every P picture is a reference so the next one can
+/// skip against it; `frame_num` counts up from 1 after the IDR.
 pub fn encode_p(frame: &YuvFrame, previous: &YuvFrame, frame_num: u32) -> Vec<u8> {
+    encode_p_within(frame, previous, frame_num, 0).nal
+}
+
+/// P picture whose every sample lands within `tolerance` of `frame`.
+/// `shown_before` is what the decoder shows for the picture before it: a
+/// block already that close to `frame` is skipped.
+pub fn encode_p_within(
+    frame: &YuvFrame,
+    shown_before: &YuvFrame,
+    frame_num: u32,
+    tolerance: u8,
+) -> Coded {
     let mut w = BitWriter::new();
     w.ue(0); // first_mb_in_slice
     w.ue(SLICE_TYPE_P);
@@ -196,28 +230,24 @@ pub fn encode_p(frame: &YuvFrame, previous: &YuvFrame, frame_num: u32) -> Vec<u8
     w.bit(false); // adaptive_ref_pic_marking_mode_flag
     write_slice_tail(&mut w);
 
-    let mut coder = MacroblockCoder::new(frame);
+    let mut coder = PictureCoder::new(frame, Some(shown_before), tolerance);
     let mut skip_run = 0;
     for index in 0..coder.mb_count() {
-        let position = coder.position(index);
-        if is_unchanged(frame, previous, position) {
-            coder.mark_skipped(index);
+        if coder.is_already_shown(index) {
             skip_run += 1;
             continue;
         }
         w.ue(skip_run);
         skip_run = 0;
-        coder.write(
-            &mut w,
-            index,
-            choose_intra(frame, position),
-            P_SLICE_INTRA_OFFSET,
-        );
+        coder.code_intra(&mut w, index, P_SLICE_INTRA_OFFSET);
     }
     if skip_run > 0 {
         w.ue(skip_run);
     }
-    bitstream::nal_unit(2, bitstream::NAL_SLICE, &w.finish())
+    Coded {
+        nal: bitstream::nal_unit(2, bitstream::NAL_SLICE, &w.finish()),
+        shown: coder.shown,
+    }
 }
 
 /// slice_qp_delta and the deblocking switch, shared by both slice types.
@@ -232,47 +262,90 @@ struct MbPosition {
     y: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LumaMode {
-    Vertical = 0,
-    Horizontal = 1,
-    Dc = 2,
+const LUMA_VERTICAL: u32 = 0;
+const LUMA_HORIZONTAL: u32 = 1;
+const LUMA_DC: u32 = 2;
+const LUMA_PLANE: u32 = 3;
+/// Intra16x16PredMode numbers, in the order they are tried.
+const LUMA_MODES: [u32; 4] = [LUMA_VERTICAL, LUMA_HORIZONTAL, LUMA_DC, LUMA_PLANE];
+const CHROMA_DC: u32 = 0;
+const CHROMA_HORIZONTAL: u32 = 1;
+const CHROMA_VERTICAL: u32 = 2;
+const CHROMA_PLANE: u32 = 3;
+/// intra_chroma_pred_mode numbers, in the order they are tried.
+const CHROMA_MODES: [u32; 4] = [CHROMA_DC, CHROMA_HORIZONTAL, CHROMA_VERTICAL, CHROMA_PLANE];
+
+const LUMA_SAMPLES: usize = MB * MB;
+const CHROMA_SAMPLES: usize = CHROMA_MB * CHROMA_MB;
+/// The QP every slice starts at: pic_init_qp with no slice delta.
+const SLICE_QP: i32 = 26;
+/// The quantisers a block with residual is tried at, coarsest first; it
+/// takes the first that lands within the tolerance.
+const QP_LADDER: [i32; 6] = [34, 28, 22, 16, 10, 4];
+/// What an I_PCM macroblock costs: past this, raw samples are cheaper.
+const PCM_BITS: usize = 8 * (LUMA_SAMPLES + 2 * CHROMA_SAMPLES);
+
+/// A luma prediction, and whether it is close enough to use as it is.
+struct LumaPick {
+    mode: u32,
+    prediction: [u8; LUMA_SAMPLES],
+    needs_residual: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ChromaMode {
-    Dc = 0,
-    Horizontal = 1,
-    Vertical = 2,
+/// The one mode Cb and Cr share, with each plane's prediction.
+struct ChromaPick {
+    mode: u32,
+    prediction: [[u8; CHROMA_SAMPLES]; 2],
+    needs_residual: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MbCoding {
-    Predicted { luma: LumaMode, chroma: ChromaMode },
-    Pcm,
+/// One macroblock coded with residual at one QP: the levels, and the
+/// samples a decoder rebuilds from them.
+struct Attempt {
+    qp: i32,
+    luma: Option<LumaLevels>,
+    chroma: [Option<ChromaLevels>; 2],
+    shown_luma: [u8; LUMA_SAMPLES],
+    shown_chroma: [[u8; CHROMA_SAMPLES]; 2],
 }
 
-/// Writes macroblocks and remembers which were I_PCM, because the
-/// CAVLC coeff_token table for the next block depends on it.
-struct MacroblockCoder<'a> {
-    frame: &'a YuvFrame,
+/// Codes one picture's macroblocks, keeping the picture a decoder shows
+/// (predictions read it) and what later blocks' syntax depends on.
+struct PictureCoder<'a> {
+    source: &'a YuvFrame,
+    /// The decoder's picture: the one before, until a block is coded.
+    shown: YuvFrame,
     width_mbs: usize,
-    is_pcm: Vec<bool>,
+    tolerance: i32,
+    /// QP of the last macroblock that set one; mb_qp_delta is against it.
+    qp: i32,
+    /// Where on `QP_LADDER` the last block with residual landed.
+    ladder_step: usize,
+    /// TotalCoeff of every 4x4 luma block, for the coeff_token tables of
+    /// the blocks right of and below it.
+    luma_counts: Vec<u8>,
+    /// The same for the 4x4 blocks of Cb and Cr.
+    chroma_counts: [Vec<u8>; 2],
 }
 
-impl<'a> MacroblockCoder<'a> {
-    fn new(frame: &'a YuvFrame) -> Self {
-        let width_mbs = frame.width / MB;
-        let height_mbs = frame.height / MB;
+impl<'a> PictureCoder<'a> {
+    fn new(source: &'a YuvFrame, shown_before: Option<&YuvFrame>, tolerance: u8) -> Self {
+        let width_mbs = source.width / MB;
+        let mb_count = width_mbs * (source.height / MB);
         Self {
-            frame,
+            source,
+            shown: shown_before.unwrap_or(source).clone(),
             width_mbs,
-            is_pcm: vec![false; width_mbs * height_mbs],
+            tolerance: i32::from(tolerance),
+            qp: SLICE_QP,
+            ladder_step: 0,
+            luma_counts: vec![0; mb_count * 16],
+            chroma_counts: [vec![0; mb_count * 4], vec![0; mb_count * 4]],
         }
     }
 
     fn mb_count(&self) -> usize {
-        self.is_pcm.len()
+        self.luma_counts.len() / 16
     }
 
     fn position(&self, index: usize) -> MbPosition {
@@ -282,216 +355,512 @@ impl<'a> MacroblockCoder<'a> {
         }
     }
 
-    fn mark_skipped(&mut self, index: usize) {
-        self.is_pcm[index] = false;
-    }
-
-    fn write(&mut self, w: &mut BitWriter, index: usize, coding: MbCoding, type_offset: u32) {
-        match coding {
-            MbCoding::Pcm => {
-                w.ue(type_offset + MB_TYPE_I_PCM);
-                w.align_with_zeros();
-                write_pcm_samples(w, self.frame, self.position(index));
-                self.is_pcm[index] = true;
-            }
-            MbCoding::Predicted { luma, chroma } => {
-                // I_16x16_<mode>_0_0: both coded block patterns zero.
-                w.ue(type_offset + 1 + luma as u32);
-                w.ue(chroma as u32);
-                w.se(0); // mb_qp_delta
-                self.write_empty_dc_block(w, index);
-                self.is_pcm[index] = false;
-            }
-        }
-    }
-
-    /// Intra16x16DCLevel with no coefficients. Its coeff_token codeword
-    /// depends on nC, the coefficient counts of the left and top blocks.
-    fn write_empty_dc_block(&self, w: &mut BitWriter, index: usize) {
+    /// Whether the decoder's picture already has this macroblock within
+    /// the tolerance, so a P picture can skip it.
+    fn is_already_shown(&self, index: usize) -> bool {
         let position = self.position(index);
-        let left = (position.x > 0).then(|| self.neighbour_total_coeff(index - 1));
-        let top = (position.y > 0).then(|| self.neighbour_total_coeff(index - self.width_mbs));
-        let n_c = match (left, top) {
-            (Some(a), Some(b)) => (a + b + 1) >> 1,
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => 0,
+        let shown = macroblock_of(&self.shown, position);
+        let source = macroblock_of(self.source, position);
+        is_within(&source.0, &shown.0, self.tolerance)
+            && is_within(&source.1[0], &shown.1[0], self.tolerance)
+            && is_within(&source.1[1], &shown.1[1], self.tolerance)
+    }
+
+    /// Code macroblock `index` as intra: a plain prediction when one is
+    /// close enough, else a prediction plus residual, else raw samples.
+    fn code_intra(&mut self, w: &mut BitWriter, index: usize, type_offset: u32) {
+        let position = self.position(index);
+        let (luma_source, chroma_source) = macroblock_of(self.source, position);
+        let luma = pick_luma(
+            &luma_source,
+            &luma_predictions(&self.shown, position),
+            self.tolerance,
+        );
+        let chroma = pick_chroma(
+            &chroma_source,
+            &chroma_predictions(&self.shown, position),
+            self.tolerance,
+        );
+        let (Some(luma), Some(chroma)) = (luma, chroma) else {
+            self.write_pcm(w, position, type_offset);
+            return;
         };
-        // TotalCoeff = 0, TrailingOnes = 0 in Table 9-5.
-        match n_c {
-            0..=1 => w.bits(0b1, 1),
-            2..=3 => w.bits(0b11, 2),
-            4..=7 => w.bits(0b1111, 4),
-            _ => w.bits(0b000011, 6),
+        if !luma.needs_residual && !chroma.needs_residual {
+            // I_16x16_<mode>_0_0: both coded block patterns zero.
+            w.ue(type_offset + 1 + luma.mode);
+            w.ue(chroma.mode);
+            w.se(0); // mb_qp_delta
+            self.set_counts(position, 0);
+            let n_c = self.luma_n_c(position, 0, 0);
+            residual::write_block(w, &[0; 16], TokenTable::Neighbours(n_c))
+                .expect("an empty block has no level to refuse");
+            self.store(position, &luma.prediction, &chroma.prediction);
+            return;
+        }
+        let sources = (&luma_source, &chroma_source);
+        for step in self.ladder_step.saturating_sub(1)..QP_LADDER.len() {
+            let Some(attempt) = self.attempt(QP_LADDER[step], sources, &luma, &chroma) else {
+                continue;
+            };
+            let mut scratch = BitWriter::new();
+            let modes = (luma.mode, chroma.mode);
+            let written =
+                self.write_with_residual(&mut scratch, position, type_offset, modes, &attempt);
+            if written.is_err() || scratch.bit_len() >= PCM_BITS {
+                continue;
+            }
+            w.append(&scratch);
+            self.qp = attempt.qp;
+            self.ladder_step = step;
+            self.store(position, &attempt.shown_luma, &attempt.shown_chroma);
+            return;
+        }
+        self.write_pcm(w, position, type_offset);
+    }
+
+    /// The decoder's samples for a macroblock.
+    fn store(
+        &mut self,
+        position: MbPosition,
+        luma: &[u8; LUMA_SAMPLES],
+        chroma: &[[u8; CHROMA_SAMPLES]; 2],
+    ) {
+        let width = self.shown.width;
+        write_square(
+            &mut self.shown.y,
+            width,
+            (position.x * MB, position.y * MB),
+            luma,
+        );
+        let at = (position.x * CHROMA_MB, position.y * CHROMA_MB);
+        write_square(&mut self.shown.u, width / 2, at, &chroma[0]);
+        write_square(&mut self.shown.v, width / 2, at, &chroma[1]);
+    }
+
+    /// Quantise the block's residual at `qp` and rebuild it as a decoder
+    /// will. `None` when a sample lands outside the tolerance.
+    fn attempt(
+        &self,
+        qp: i32,
+        (luma_source, chroma_source): (&[u8; LUMA_SAMPLES], &[[u8; CHROMA_SAMPLES]; 2]),
+        luma: &LumaPick,
+        chroma: &ChromaPick,
+    ) -> Option<Attempt> {
+        let mut attempt = Attempt {
+            qp,
+            luma: None,
+            chroma: [None, None],
+            shown_luma: luma.prediction,
+            shown_chroma: chroma.prediction,
+        };
+        if luma.needs_residual {
+            let residual = difference(luma_source, &luma.prediction);
+            let levels = residual::quantize_luma(&residual, qp);
+            let rebuilt = residual::rebuild_luma(&levels, qp);
+            attempt.shown_luma = add_clipped(&luma.prediction, &rebuilt);
+            attempt.luma = Some(levels);
+        }
+        if chroma.needs_residual {
+            let chroma_qp = residual::chroma_qp(qp);
+            for plane in 0..2 {
+                let residual = difference(&chroma_source[plane], &chroma.prediction[plane]);
+                let levels = residual::quantize_chroma(&residual, chroma_qp);
+                let rebuilt = residual::rebuild_chroma(&levels, chroma_qp);
+                attempt.shown_chroma[plane] = add_clipped(&chroma.prediction[plane], &rebuilt);
+                attempt.chroma[plane] = Some(levels);
+            }
+        }
+        let is_close = is_within(luma_source, &attempt.shown_luma, self.tolerance)
+            && is_within(&chroma_source[0], &attempt.shown_chroma[0], self.tolerance)
+            && is_within(&chroma_source[1], &attempt.shown_chroma[1], self.tolerance);
+        is_close.then_some(attempt)
+    }
+
+    /// An Intra16x16 macroblock with its residual (7.3.5): the type names
+    /// the luma mode and which coefficients follow. `modes` are the luma
+    /// and chroma prediction modes.
+    fn write_with_residual(
+        &mut self,
+        w: &mut BitWriter,
+        position: MbPosition,
+        type_offset: u32,
+        (luma_mode, chroma_mode): (u32, u32),
+        attempt: &Attempt,
+    ) -> Result<(), LevelTooLarge> {
+        let has_luma_ac = attempt.luma.as_ref().is_some_and(LumaLevels::has_ac);
+        let chroma_levels = || attempt.chroma.iter().flatten();
+        let chroma_pattern = if chroma_levels().any(ChromaLevels::has_ac) {
+            2
+        } else {
+            u32::from(chroma_levels().any(ChromaLevels::has_dc))
+        };
+        let luma_pattern = if has_luma_ac { 12 } else { 0 };
+        w.ue(type_offset + 1 + luma_mode + 4 * chroma_pattern + luma_pattern);
+        w.ue(chroma_mode);
+        w.se(attempt.qp - self.qp); // mb_qp_delta
+        self.set_counts(position, 0);
+
+        // Intra16x16DCLevel takes its nC as block 0 would.
+        let dc = attempt
+            .luma
+            .as_ref()
+            .map_or([0; 16], |levels| ZIGZAG.map(|at| levels.dc[at]));
+        let n_c = self.luma_n_c(position, 0, 0);
+        residual::write_block(w, &dc, TokenTable::Neighbours(n_c))?;
+        if let (true, Some(levels)) = (has_luma_ac, &attempt.luma) {
+            for (column, row) in LUMA_BLOCK_AT {
+                let block = &levels.ac[4 * row + column];
+                let ac: [i32; 15] = std::array::from_fn(|at| block[ZIGZAG[at + 1]]);
+                let n_c = self.luma_n_c(position, column, row);
+                let total = residual::write_block(w, &ac, TokenTable::Neighbours(n_c))?;
+                let at = self.luma_count_index(position, column, row);
+                self.luma_counts[at] = total as u8;
+            }
+        }
+        if chroma_pattern == 0 {
+            return Ok(());
+        }
+        for levels in &attempt.chroma {
+            let dc = levels.as_ref().map_or([0; 4], |levels| levels.dc);
+            residual::write_block(w, &dc, TokenTable::ChromaDc)?;
+        }
+        if chroma_pattern == 1 {
+            return Ok(());
+        }
+        for (plane, levels) in attempt.chroma.iter().enumerate() {
+            for block in 0..4 {
+                let (column, row) = (block % 2, block / 2);
+                let ac: [i32; 15] = match levels {
+                    Some(levels) => std::array::from_fn(|at| levels.ac[block][ZIGZAG[at + 1]]),
+                    None => [0; 15],
+                };
+                let n_c = self.chroma_n_c(plane, position, column, row);
+                let total = residual::write_block(w, &ac, TokenTable::Neighbours(n_c))?;
+                let at = self.chroma_count_index(position, column, row);
+                self.chroma_counts[plane][at] = total as u8;
+            }
+        }
+        Ok(())
+    }
+
+    /// I_PCM: the raw samples, which the decoder shows as they are.
+    fn write_pcm(&mut self, w: &mut BitWriter, position: MbPosition, type_offset: u32) {
+        w.ue(type_offset + MB_TYPE_I_PCM);
+        w.align_with_zeros();
+        let (luma, chroma) = macroblock_of(self.source, position);
+        w.bytes(&luma);
+        w.bytes(&chroma[0]);
+        w.bytes(&chroma[1]);
+        self.set_counts(position, PCM_TOTAL_COEFF as u8);
+        self.store(position, &luma, &chroma);
+    }
+
+    /// Every 4x4 block of the macroblock reports `count` coefficients.
+    fn set_counts(&mut self, position: MbPosition, count: u8) {
+        for row in 0..4 {
+            for column in 0..4 {
+                let at = self.luma_count_index(position, column, row);
+                self.luma_counts[at] = count;
+            }
+        }
+        for row in 0..2 {
+            for column in 0..2 {
+                let at = self.chroma_count_index(position, column, row);
+                self.chroma_counts[0][at] = count;
+                self.chroma_counts[1][at] = count;
+            }
         }
     }
 
-    /// Skipped and predicted blocks carry no coefficients; I_PCM counts
-    /// as 16.
-    fn neighbour_total_coeff(&self, index: usize) -> u32 {
-        if self.is_pcm[index] {
-            PCM_TOTAL_COEFF
+    fn luma_count_index(&self, position: MbPosition, column: usize, row: usize) -> usize {
+        (4 * position.y + row) * (4 * self.width_mbs) + 4 * position.x + column
+    }
+
+    fn chroma_count_index(&self, position: MbPosition, column: usize, row: usize) -> usize {
+        (2 * position.y + row) * (2 * self.width_mbs) + 2 * position.x + column
+    }
+
+    /// nC (9.2.1) for the luma block at (`column`, `row`) of a macroblock.
+    fn luma_n_c(&self, position: MbPosition, column: usize, row: usize) -> u32 {
+        let at = self.luma_count_index(position, column, row);
+        let has_left = 4 * position.x + column > 0;
+        let has_top = 4 * position.y + row > 0;
+        n_c(&self.luma_counts, at, 4 * self.width_mbs, has_left, has_top)
+    }
+
+    fn chroma_n_c(&self, plane: usize, position: MbPosition, column: usize, row: usize) -> u32 {
+        let at = self.chroma_count_index(position, column, row);
+        let has_left = 2 * position.x + column > 0;
+        let has_top = 2 * position.y + row > 0;
+        let stride = 2 * self.width_mbs;
+        n_c(&self.chroma_counts[plane], at, stride, has_left, has_top)
+    }
+}
+
+/// nC from the coefficient counts of the blocks left of and above `at`:
+/// their rounded mean, or the one there is, or 0.
+fn n_c(counts: &[u8], at: usize, stride: usize, has_left: bool, has_top: bool) -> u32 {
+    let left = has_left.then(|| u32::from(counts[at - 1]));
+    let top = has_top.then(|| u32::from(counts[at - stride]));
+    match (left, top) {
+        (Some(a), Some(b)) => (a + b + 1) >> 1,
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => 0,
+    }
+}
+
+/// One macroblock of `frame`: its luma, then Cb and Cr.
+fn macroblock_of(
+    frame: &YuvFrame,
+    position: MbPosition,
+) -> ([u8; LUMA_SAMPLES], [[u8; CHROMA_SAMPLES]; 2]) {
+    let luma = read_square(&frame.y, frame.width, (position.x * MB, position.y * MB));
+    let at = (position.x * CHROMA_MB, position.y * CHROMA_MB);
+    let chroma = [&frame.u, &frame.v].map(|plane| read_square(plane, frame.width / 2, at));
+    (luma, chroma)
+}
+
+/// The `N`-sample square (16x16 or 8x8) with its corner at `(x0, y0)`.
+fn read_square<const N: usize>(samples: &[u8], stride: usize, (x0, y0): (usize, usize)) -> [u8; N] {
+    let size = N.isqrt();
+    let mut block = [0; N];
+    for row in 0..size {
+        let start = (y0 + row) * stride + x0;
+        block[row * size..(row + 1) * size].copy_from_slice(&samples[start..start + size]);
+    }
+    block
+}
+
+fn write_square<const N: usize>(
+    samples: &mut [u8],
+    stride: usize,
+    (x0, y0): (usize, usize),
+    block: &[u8; N],
+) {
+    let size = N.isqrt();
+    for row in 0..size {
+        let start = (y0 + row) * stride + x0;
+        samples[start..start + size].copy_from_slice(&block[row * size..(row + 1) * size]);
+    }
+}
+
+fn is_within<const N: usize>(a: &[u8; N], b: &[u8; N], tolerance: i32) -> bool {
+    if tolerance == 0 {
+        return a == b;
+    }
+    a.iter()
+        .zip(b)
+        .all(|(a, b)| i32::from(a.abs_diff(*b)) <= tolerance)
+}
+
+fn difference<const N: usize>(source: &[u8; N], prediction: &[u8; N]) -> [i32; N] {
+    std::array::from_fn(|at| i32::from(source[at]) - i32::from(prediction[at]))
+}
+
+fn add_clipped<const N: usize>(prediction: &[u8; N], residual: &[i32; N]) -> [u8; N] {
+    std::array::from_fn(|at| (i32::from(prediction[at]) + residual[at]).clamp(0, 255) as u8)
+}
+
+/// Sum of absolute differences.
+fn distance<const N: usize>(a: &[u8; N], b: &[u8; N]) -> u32 {
+    a.iter()
+        .zip(b)
+        .map(|(a, b)| u32::from(a.abs_diff(*b)))
+        .sum()
+}
+
+/// The first luma mode whose prediction is within the tolerance; failing
+/// that, when residual is allowed, the closest one. `None` means raw
+/// samples.
+fn pick_luma(
+    source: &[u8; LUMA_SAMPLES],
+    predictions: &[Option<[u8; LUMA_SAMPLES]>; 4],
+    tolerance: i32,
+) -> Option<LumaPick> {
+    let available = || {
+        LUMA_MODES
+            .iter()
+            .zip(predictions)
+            .filter_map(|(mode, prediction)| Some((*mode, prediction.as_ref()?)))
+    };
+    let pick = |(mode, prediction): (u32, &[u8; LUMA_SAMPLES]), needs_residual| LumaPick {
+        mode,
+        prediction: *prediction,
+        needs_residual,
+    };
+    if let Some(close) = available().find(|(_, p)| is_within(source, p, tolerance)) {
+        return Some(pick(close, false));
+    }
+    if tolerance == 0 {
+        return None;
+    }
+    available()
+        .min_by_key(|(_, p)| distance(source, p))
+        .map(|closest| pick(closest, true))
+}
+
+/// Like `pick_luma`, for the mode Cb and Cr share.
+fn pick_chroma(
+    source: &[[u8; CHROMA_SAMPLES]; 2],
+    predictions: &[Option<[[u8; CHROMA_SAMPLES]; 2]>; 4],
+    tolerance: i32,
+) -> Option<ChromaPick> {
+    let available = || {
+        CHROMA_MODES
+            .iter()
+            .zip(predictions)
+            .filter_map(|(mode, prediction)| Some((*mode, prediction.as_ref()?)))
+    };
+    let pick = |(mode, prediction): (u32, &[[u8; CHROMA_SAMPLES]; 2]), needs_residual| ChromaPick {
+        mode,
+        prediction: *prediction,
+        needs_residual,
+    };
+    let is_close = |p: &[[u8; CHROMA_SAMPLES]; 2]| {
+        is_within(&source[0], &p[0], tolerance) && is_within(&source[1], &p[1], tolerance)
+    };
+    if let Some(close) = available().find(|(_, p)| is_close(p)) {
+        return Some(pick(close, false));
+    }
+    if tolerance == 0 {
+        return None;
+    }
+    available()
+        .min_by_key(|(_, p)| distance(&source[0], &p[0]) + distance(&source[1], &p[1]))
+        .map(|closest| pick(closest, true))
+}
+
+/// The decoded samples around a block that intra prediction reads.
+struct Edges {
+    size: usize,
+    /// The row above, when the block isn't on the top edge.
+    top: Option<[i32; MB]>,
+    /// The column to the left, when the block isn't on the left edge.
+    left: Option<[i32; MB]>,
+    /// The sample above-left, when both exist.
+    corner: i32,
+}
+
+impl Edges {
+    fn of(samples: &[u8], stride: usize, (x0, y0): (usize, usize), size: usize) -> Self {
+        let sample = |x: usize, y: usize| i32::from(samples[y * stride + x]);
+        let within = |at: usize, read: &dyn Fn(usize) -> i32| if at < size { read(at) } else { 0 };
+        let top = (y0 > 0).then(|| std::array::from_fn(|x| within(x, &|x| sample(x0 + x, y0 - 1))));
+        let left =
+            (x0 > 0).then(|| std::array::from_fn(|y| within(y, &|y| sample(x0 - 1, y0 + y))));
+        let corner = if x0 > 0 && y0 > 0 {
+            sample(x0 - 1, y0 - 1)
         } else {
             0
+        };
+        Self {
+            size,
+            top,
+            left,
+            corner,
         }
     }
-}
 
-fn write_pcm_samples(w: &mut BitWriter, frame: &YuvFrame, position: MbPosition) {
-    for row in 0..MB {
-        let start = (position.y * MB + row) * frame.width + position.x * MB;
-        w.bytes(&frame.y[start..start + MB]);
-    }
-    let chroma_width = frame.width / 2;
-    for plane in [&frame.u, &frame.v] {
-        for row in 0..CHROMA_MB {
-            let start = (position.y * CHROMA_MB + row) * chroma_width + position.x * CHROMA_MB;
-            w.bytes(&plane[start..start + CHROMA_MB]);
-        }
-    }
-}
-
-fn is_unchanged(frame: &YuvFrame, previous: &YuvFrame, position: MbPosition) -> bool {
-    let luma_same = (0..MB).all(|row| {
-        let start = (position.y * MB + row) * frame.width + position.x * MB;
-        frame.y[start..start + MB] == previous.y[start..start + MB]
-    });
-    let chroma_width = frame.width / 2;
-    luma_same
-        && (0..CHROMA_MB).all(|row| {
-            let start = (position.y * CHROMA_MB + row) * chroma_width + position.x * CHROMA_MB;
-            frame.u[start..start + CHROMA_MB] == previous.u[start..start + CHROMA_MB]
-                && frame.v[start..start + CHROMA_MB] == previous.v[start..start + CHROMA_MB]
-        })
-}
-
-/// First luma + chroma prediction pair that reproduces the block
-/// exactly, or I_PCM when none does.
-fn choose_intra(frame: &YuvFrame, position: MbPosition) -> MbCoding {
-    let luma = [LumaMode::Vertical, LumaMode::Horizontal, LumaMode::Dc]
-        .into_iter()
-        .find(|mode| predicts_luma(frame, position, *mode));
-    let chroma = [ChromaMode::Dc, ChromaMode::Horizontal, ChromaMode::Vertical]
-        .into_iter()
-        .find(|mode| predicts_chroma(frame, position, *mode));
-    match (luma, chroma) {
-        (Some(luma), Some(chroma)) => MbCoding::Predicted { luma, chroma },
-        _ => MbCoding::Pcm,
-    }
-}
-
-/// One plane of a frame plus the block geometry, so the luma and both
-/// chroma predictors share the same neighbour reads.
-struct PlaneBlock<'a> {
-    samples: &'a [u8],
-    stride: usize,
-    x0: usize,
-    y0: usize,
-    size: usize,
-}
-
-impl PlaneBlock<'_> {
-    fn at(&self, x: usize, y: usize) -> u8 {
-        self.samples[(self.y0 + y) * self.stride + self.x0 + x]
+    /// A block predicted sample by sample, from (column, row).
+    fn block<const N: usize>(&self, predict: impl Fn(usize, usize) -> i32) -> [u8; N] {
+        std::array::from_fn(|at| predict(at % self.size, at / self.size) as u8)
     }
 
-    fn has_top(&self) -> bool {
-        self.y0 > 0
+    fn vertical<const N: usize>(&self) -> Option<[u8; N]> {
+        let top = self.top?;
+        Some(self.block(|x, _| top[x]))
     }
 
-    fn has_left(&self) -> bool {
-        self.x0 > 0
+    fn horizontal<const N: usize>(&self) -> Option<[u8; N]> {
+        let left = self.left?;
+        Some(self.block(|_, y| left[y]))
     }
 
-    fn top(&self, x: usize) -> u32 {
-        self.samples[(self.y0 - 1) * self.stride + self.x0 + x] as u32
-    }
-
-    fn left(&self, y: usize) -> u32 {
-        self.samples[(self.y0 + y) * self.stride + self.x0 - 1] as u32
-    }
-
-    /// Whether `predict(x, y)` equals every sample of the block.
-    fn matches(&self, predict: impl Fn(usize, usize) -> u32) -> bool {
-        (0..self.size).all(|y| (0..self.size).all(|x| self.at(x, y) as u32 == predict(x, y)))
+    /// Plane prediction (8.3.3.4 for luma, 8.3.4.4 for chroma): a ramp
+    /// fitted to both edges. `slope_factor` is 5 for 16x16, 34 for 8x8.
+    fn plane<const N: usize>(&self, slope_factor: i32) -> Option<[u8; N]> {
+        let (top, left) = (self.top?, self.left?);
+        let half = self.size / 2;
+        // p[-1] of either edge is the corner sample.
+        let before = |edge: &[i32; MB], at: usize| {
+            if at == 0 {
+                self.corner
+            } else {
+                edge[at - 1]
+            }
+        };
+        let gradient = |edge: &[i32; MB]| {
+            (0..half)
+                .map(|i| (i as i32 + 1) * (edge[half + i] - before(edge, half - 1 - i)))
+                .sum::<i32>()
+        };
+        let a = 16 * (left[self.size - 1] + top[self.size - 1]);
+        let b = (slope_factor * gradient(&top) + 32) >> 6;
+        let c = (slope_factor * gradient(&left) + 32) >> 6;
+        let centre = half as i32 - 1;
+        Some(self.block(|x, y| {
+            ((a + b * (x as i32 - centre) + c * (y as i32 - centre) + 16) >> 5).clamp(0, 255)
+        }))
     }
 }
 
-fn luma_block(frame: &YuvFrame, position: MbPosition) -> PlaneBlock<'_> {
-    PlaneBlock {
-        samples: &frame.y,
-        stride: frame.width,
-        x0: position.x * MB,
-        y0: position.y * MB,
-        size: MB,
-    }
-}
-
-fn chroma_blocks(frame: &YuvFrame, position: MbPosition) -> [PlaneBlock<'_>; 2] {
-    let block = |samples| PlaneBlock {
-        samples,
-        stride: frame.width / 2,
-        x0: position.x * CHROMA_MB,
-        y0: position.y * CHROMA_MB,
-        size: CHROMA_MB,
+/// Intra_16x16 predictions (8.3.3) in `LUMA_MODES` order; `None` where
+/// the edge a mode reads is outside the picture.
+fn luma_predictions(shown: &YuvFrame, position: MbPosition) -> [Option<[u8; LUMA_SAMPLES]>; 4] {
+    let at = (position.x * MB, position.y * MB);
+    let edges = Edges::of(&shown.y, shown.width, at, MB);
+    let sum = |edge: &[i32; MB]| edge.iter().sum::<i32>();
+    let dc = match (&edges.top, &edges.left) {
+        (Some(top), Some(left)) => (sum(top) + sum(left) + 16) >> 5,
+        (Some(top), None) => (sum(top) + 8) >> 4,
+        (None, Some(left)) => (sum(left) + 8) >> 4,
+        (None, None) => 128,
     };
-    [block(&frame.u), block(&frame.v)]
+    [
+        edges.vertical(),
+        edges.horizontal(),
+        Some(edges.block(|_, _| dc)),
+        edges.plane(5),
+    ]
 }
 
-/// Intra_16x16 prediction (spec 8.3.3).
-fn predicts_luma(frame: &YuvFrame, position: MbPosition, mode: LumaMode) -> bool {
-    let block = luma_block(frame, position);
-    match mode {
-        LumaMode::Vertical => block.has_top() && block.matches(|x, _| block.top(x)),
-        LumaMode::Horizontal => block.has_left() && block.matches(|_, y| block.left(y)),
-        LumaMode::Dc => {
-            let top: u32 = (0..MB)
-                .map(|x| if block.has_top() { block.top(x) } else { 0 })
-                .sum();
-            let left: u32 = (0..MB)
-                .map(|y| if block.has_left() { block.left(y) } else { 0 })
-                .sum();
-            let dc = match (block.has_top(), block.has_left()) {
-                (true, true) => (top + left + 16) >> 5,
-                (true, false) => (top + 8) >> 4,
-                (false, true) => (left + 8) >> 4,
-                (false, false) => 128,
-            };
-            block.matches(|_, _| dc)
-        }
-    }
-}
-
-/// Intra chroma prediction (spec 8.3.4) for both chroma planes.
-fn predicts_chroma(frame: &YuvFrame, position: MbPosition, mode: ChromaMode) -> bool {
-    chroma_blocks(frame, position)
-        .iter()
-        .all(|block| match mode {
-            ChromaMode::Vertical => block.has_top() && block.matches(|x, _| block.top(x)),
-            ChromaMode::Horizontal => block.has_left() && block.matches(|_, y| block.left(y)),
-            ChromaMode::Dc => block.matches(|x, y| chroma_dc(block, x / 4 * 4, y / 4 * 4)),
-        })
+/// Intra chroma predictions (8.3.4) of Cb and Cr in `CHROMA_MODES` order.
+fn chroma_predictions(
+    shown: &YuvFrame,
+    position: MbPosition,
+) -> [Option<[[u8; CHROMA_SAMPLES]; 2]>; 4] {
+    let at = (position.x * CHROMA_MB, position.y * CHROMA_MB);
+    let edges = [&shown.u, &shown.v].map(|plane| Edges::of(plane, shown.width / 2, at, CHROMA_MB));
+    let both = |predict: &dyn Fn(&Edges) -> Option<[u8; CHROMA_SAMPLES]>| {
+        Some([predict(&edges[0])?, predict(&edges[1])?])
+    };
+    [
+        both(&|edges| Some(edges.block(|x, y| chroma_dc(edges, x / 4 * 4, y / 4 * 4)))),
+        both(&|edges| edges.horizontal()),
+        both(&|edges| edges.vertical()),
+        both(&|edges| edges.plane(34)),
+    ]
 }
 
 /// DC value of the 4x4 chroma sub-block at (x_offset, y_offset), spec
 /// 8.3.4.1-3. The corner and diagonal sub-blocks average both edges;
 /// the top-right one prefers the top edge, the bottom-left one the left.
-fn chroma_dc(block: &PlaneBlock, x_offset: usize, y_offset: usize) -> u32 {
-    let top_sum = || (0..4).map(|i| block.top(x_offset + i)).sum::<u32>();
-    let left_sum = || (0..4).map(|i| block.left(y_offset + i)).sum::<u32>();
-    let (has_top, has_left) = (block.has_top(), block.has_left());
+fn chroma_dc(edges: &Edges, x_offset: usize, y_offset: usize) -> i32 {
+    let sum = |edge: &[i32; MB], from: usize| edge[from..from + 4].iter().sum::<i32>();
+    let top = edges.top.as_ref().map(|top| sum(top, x_offset));
+    let left = edges.left.as_ref().map(|left| sum(left, y_offset));
     let is_corner_or_diagonal = (x_offset == 0) == (y_offset == 0);
-    if is_corner_or_diagonal && has_top && has_left {
-        return (top_sum() + left_sum() + 4) >> 3;
+    if let (true, Some(top), Some(left)) = (is_corner_or_diagonal, top, left) {
+        return (top + left + 4) >> 3;
     }
     let prefers_top = x_offset > 0 && y_offset == 0;
-    match (prefers_top, has_top, has_left) {
-        (true, true, _) => (top_sum() + 2) >> 2,
-        (false, _, true) => (left_sum() + 2) >> 2,
-        (_, true, _) => (top_sum() + 2) >> 2,
-        (_, _, true) => (left_sum() + 2) >> 2,
-        _ => 128,
-    }
+    let one_edge = if prefers_top {
+        top.or(left)
+    } else {
+        left.or(top)
+    };
+    one_edge.map_or(128, |sum| (sum + 2) >> 2)
 }
 
 #[cfg(test)]
