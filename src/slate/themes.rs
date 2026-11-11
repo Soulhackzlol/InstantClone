@@ -11,6 +11,7 @@
 use super::font::{self, Align, Weight};
 use super::pixel_font::{self, ADVANCE_COLUMNS, GLYPH_COLUMNS, GLYPH_ROWS};
 use super::raster::{Canvas, Rgb};
+use super::soft_themes;
 use crate::crash_protection::SlateTheme;
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -30,15 +31,18 @@ pub fn draw(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
         SlateTheme::Beacon => draw_beacon(canvas, style, phase),
         SlateTheme::Orbit => draw_orbit(canvas, style, phase),
         SlateTheme::Studio => draw_studio(canvas, style, phase),
+        SlateTheme::Aurora => soft_themes::draw_aurora(canvas, style, phase),
+        SlateTheme::Halo => soft_themes::draw_halo(canvas, style, phase),
+        SlateTheme::Tide => soft_themes::draw_tide(canvas, style, phase),
     }
 }
 
 /// Short side over the 1080 px design size.
-fn design_scale(canvas: &Canvas) -> f32 {
+pub(super) fn design_scale(canvas: &Canvas) -> f32 {
     canvas.width().min(canvas.height()) as f32 / 1080.0
 }
 
-fn canvas_center(canvas: &Canvas) -> (f32, f32) {
+pub(super) fn canvas_center(canvas: &Canvas) -> (f32, f32) {
     (
         (canvas.width() as f32 / 2.0).round(),
         (canvas.height() as f32 / 2.0).round(),
@@ -56,10 +60,10 @@ fn stepped(phase: f32, steps: f32) -> f32 {
 
 const HEADLINE_COLOR: Rgb = Rgb::new(0xee, 0xf0, 0xf3);
 const SUBLINE_COLOR: Rgb = Rgb::new(0x7d, 0x85, 0x91);
-const HEADLINE_PX: f32 = 46.0;
-const SUBLINE_PX: f32 = 25.0;
+pub(super) const HEADLINE_PX: f32 = 46.0;
+pub(super) const SUBLINE_PX: f32 = 25.0;
 /// Headline baseline to subline baseline, at 1080 px.
-const SUBLINE_DROP_PX: f32 = 48.0;
+pub(super) const SUBLINE_DROP_PX: f32 = 48.0;
 
 /// Unlit dots and empty tracks: the background lifted a little toward the
 /// text, so they read on any background the streamer picks.
@@ -69,7 +73,7 @@ fn idle_color(style: &ScreenStyle) -> Rgb {
 
 /// Headline over subline, placed by `align` at `x`, with the headline's
 /// baseline at `baseline_y`. The text-first themes all set it this way.
-fn draw_text_block(
+pub(super) fn draw_text_block(
     canvas: &mut Canvas,
     style: &ScreenStyle,
     (x, baseline_y): (f32, f32),
@@ -443,15 +447,17 @@ mod tests {
         assert!(stripe_seen, "the stripe never showed on the track");
     }
 
-    /// The dashboard plays the loop as a strip of 24 frames (web.rs
-    /// crash_protection_preview, crash-protection.js CP_PREVIEW_FRAMES).
-    /// Every stream frame at 30 fps must be the strip frame showing at that
-    /// moment, so the preview moves exactly as viewers see it.
+    /// The dashboard plays a flat theme's loop as a strip of 24 frames
+    /// (web.rs crash_protection_preview, crash-protection.js
+    /// CP_PREVIEW_FRAMES). Every stream frame at 30 fps must be the strip
+    /// frame showing at that moment, so the preview moves exactly as
+    /// viewers see it. Soft themes move continuously and preview otherwise.
     #[test]
     fn the_24_frame_preview_shows_every_stream_frame() {
         const PREVIEW_FRAMES: usize = 24;
-        let stream_frames = crate::crash_hold::SLATE_FPS as usize * super::super::LOOP_MS / 1000;
-        for theme in SlateTheme::ALL {
+        let stream_frames =
+            crate::crash_hold::SLATE_FPS as usize * super::super::KEYFRAME_INTERVAL_MS / 1000;
+        for theme in SlateTheme::ALL.into_iter().filter(|theme| !theme.is_soft()) {
             let style = style(theme);
             let strip: Vec<YuvFrame> = (0..PREVIEW_FRAMES)
                 .map(|k| render(&style, 480, 270, k as f32 / PREVIEW_FRAMES as f32))

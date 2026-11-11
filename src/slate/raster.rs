@@ -122,6 +122,12 @@ impl Canvas {
         }
     }
 
+    /// The pixel at (`x`, `y`).
+    #[cfg(test)]
+    pub fn pixel(&self, x: usize, y: usize) -> Rgb {
+        self.pixels[y * self.width + x]
+    }
+
     /// Circle with 4x4 supersampled edges.
     pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Rgb) {
         self.fill_ring(cx, cy, radius, 0.0, color);

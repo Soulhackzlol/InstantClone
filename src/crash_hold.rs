@@ -25,7 +25,7 @@ use crate::controller::{Controller, DestinationState};
 use crate::crash_protection::CrashProtection;
 use crate::h264::{AudioEgress, VideoEgress};
 use crate::rtmp::client::EgressSink;
-use crate::slate::{SlateCodec, SlateLoop, StreamShape};
+use crate::slate::{Interval, SlateCodec, SlateLoop, StreamShape};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -181,9 +181,8 @@ enum VideoTrack {
     Screen {
         shape: StreamShape,
         codec: SlateCodec,
-        /// The two IDR variants, then the P frames, in loop order.
-        keyframes: [Vec<u8>; 2],
-        deltas: Vec<Vec<u8>>,
+        /// The loop's keyframe intervals as tags, in play order.
+        intervals: Vec<Interval>,
     },
     HeldFrame(Arc<[u8]>),
 }
@@ -193,15 +192,22 @@ impl VideoTrack {
         let tag = |keyframe: bool, sample: &[u8]| {
             video_tag(target.framing, target.fourcc, keyframe, sample)
         };
+        let intervals = slate
+            .intervals
+            .iter()
+            .map(|interval| Interval {
+                keyframes: [0, 1].map(|replay| tag(true, &interval.keyframes[replay])),
+                deltas: interval
+                    .deltas
+                    .iter()
+                    .map(|sample| tag(false, sample))
+                    .collect(),
+            })
+            .collect();
         VideoTrack::Screen {
             shape: slate.shape,
             codec: target.codec,
-            keyframes: [0, 1].map(|replay| tag(true, &slate.keyframes[replay])),
-            deltas: slate
-                .deltas
-                .iter()
-                .map(|sample| tag(false, sample))
-                .collect(),
+            intervals,
         }
     }
 }
@@ -636,18 +642,15 @@ pub(crate) fn delay_rebuilt(
 /// the loop, or the held keyframe once a second.
 fn video_frame(track: &VideoTrack, index: u64) -> Option<&[u8]> {
     match track {
-        VideoTrack::Screen {
-            keyframes, deltas, ..
-        } => {
-            let frames = 1 + deltas.len() as u64;
-            let position = (index % frames) as usize;
-            if position == 0 {
+        VideoTrack::Screen { intervals, .. } => {
+            let per_interval = 1 + intervals[0].deltas.len() as u64;
+            let keyframes_sent = index / per_interval;
+            let interval = &intervals[(keyframes_sent % intervals.len() as u64) as usize];
+            match (index % per_interval) as usize {
                 // Alternate the two IDR variants: back-to-back IDRs must not
                 // share an idr_pic_id.
-                let replay = (index / frames) as usize % 2;
-                Some(&keyframes[replay])
-            } else {
-                Some(&deltas[position - 1])
+                0 => Some(&interval.keyframes[(keyframes_sent % 2) as usize]),
+                position => Some(&interval.deltas[position - 1]),
             }
         }
         VideoTrack::HeldFrame(tag) => index.is_multiple_of(HELD_FRAME_EVERY).then_some(&tag[..]),

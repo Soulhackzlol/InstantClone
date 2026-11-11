@@ -1,10 +1,13 @@
 //! The crash-protection reconnect screen.
 //!
-//! Draws the streamer's chosen theme and encodes it as a 2 s H.264 or HEVC
-//! loop: one keyframe plus P frames, built once per stream shape and codec
-//! and replayed with fresh timestamps for as long as the hold lasts. Keeping the loop
-//! exactly one keyframe interval long means every replay starts on an
-//! IDR, so viewers who join mid-hold get a picture within 2 s.
+//! Draws the streamer's chosen theme and encodes it as an H.264 or HEVC
+//! loop, built once per stream shape and codec and replayed with fresh
+//! timestamps for as long as the hold lasts. A loop is one or more 2 s
+//! keyframe intervals, each a keyframe plus P frames, so viewers who join
+//! mid-hold get a picture within 2 s. Flat themes loop in one interval and
+//! encode losslessly; soft ones (gradients, glows) loop over several and
+//! encode within a small tolerance. The intervals of a loop are encoded
+//! side by side, one thread each, as each starts from its own keyframe.
 
 mod bitstream;
 mod cabac;
@@ -17,6 +20,7 @@ mod pixel_font;
 mod png;
 mod raster;
 mod residual;
+mod soft_themes;
 mod themes;
 
 pub use encoder::StreamShape;
@@ -27,7 +31,8 @@ use raster::Canvas;
 use std::fmt;
 use themes::ScreenStyle;
 
-pub const LOOP_MS: usize = 2000;
+/// Every keyframe interval of a loop is this long.
+pub const KEYFRAME_INTERVAL_MS: usize = 2000;
 const MIN_SIDE: usize = 16;
 const MAX_SIDE: usize = 8192;
 const MAX_FPS: u32 = 240;
@@ -60,14 +65,21 @@ impl SlateCodec {
 /// sequence header of its own: every keyframe carries the loop's
 /// parameter sets in-band, under ids the stream it interrupts doesn't use.
 pub struct SlateLoop {
-    /// The loop's first picture as a length-prefixed sample (H.264: SPS,
-    /// PPS, IDR; HEVC: VPS, SPS, PPS, IDR), twice. Replays alternate them:
-    /// back-to-back H.264 IDRs must not share an idr_pic_id, so those two
-    /// differ; HEVC IDRs carry no id, so those two are the same.
-    pub keyframes: [Vec<u8>; 2],
-    /// The rest of the loop (P pictures) as length-prefixed samples.
-    pub deltas: Vec<Vec<u8>>,
+    /// The keyframe intervals, in play order. All are the same length.
+    pub intervals: Vec<Interval>,
     pub shape: StreamShape,
+}
+
+/// One keyframe interval of a loop, as length-prefixed samples (or, once
+/// framed for a destination, as its tags).
+pub struct Interval {
+    /// The interval's first picture (H.264: SPS, PPS, IDR; HEVC: VPS, SPS,
+    /// PPS, IDR), twice. Replays alternate them: back-to-back H.264 IDRs
+    /// must not share an idr_pic_id, so those two differ; HEVC IDRs carry
+    /// no id, so those two are the same.
+    pub keyframes: [Vec<u8>; 2],
+    /// The rest of the interval: P pictures.
+    pub deltas: Vec<Vec<u8>>,
 }
 
 /// The encoder only handles 4:2:0 frames with even sides.
@@ -133,48 +145,84 @@ pub fn build_loop(
         return Err(UnsupportedShape(shape));
     }
     let style = screen_style(settings);
-    let frame_count = frames_per_loop(shape.fps);
+    let frames = frames_per_interval(shape.fps);
+    let count = settings.theme.loop_intervals();
+    let plan = |index: usize| IntervalPlan {
+        first_frame: index * frames,
+        frames,
+        loop_frames: count * frames,
+        tolerance: settings.theme.tolerance(),
+    };
+    let intervals = std::thread::scope(|scope| {
+        let style = &style;
+        let workers: Vec<_> = (0..count)
+            .map(|index| scope.spawn(move || encode_interval(style, shape, codec, plan(index))))
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("encoding a screen interval panicked"))
+            .collect()
+    });
+    Ok(SlateLoop { intervals, shape })
+}
+
+/// Which frames of the loop one interval holds, and how closely to code
+/// them.
+#[derive(Debug, Clone, Copy)]
+struct IntervalPlan {
+    first_frame: usize,
+    frames: usize,
+    loop_frames: usize,
+    tolerance: u8,
+}
+
+/// Render and encode one keyframe interval. Each picture is coded against
+/// what a decoder shows for the one before, so with a tolerance the small
+/// differences never pile up.
+fn encode_interval(
+    style: &ScreenStyle,
+    shape: StreamShape,
+    codec: SlateCodec,
+    plan: IntervalPlan,
+) -> Interval {
     let render = |index: usize| {
         let mut canvas = Canvas::new(shape.width, shape.height, style.background);
-        themes::draw(&mut canvas, &style, index as f32 / frame_count as f32);
+        let phase = (plan.first_frame + index) as f32 / plan.loop_frames as f32;
+        themes::draw(&mut canvas, style, phase);
         canvas
     };
-
-    let mut previous_canvas = render(0);
-    let mut previous = previous_canvas.to_yuv420_padded(codec.block_size());
-    let keyframes = match codec {
+    let mut source_canvas = render(0);
+    let mut source = source_canvas.to_yuv420_padded(codec.block_size());
+    let (keyframes, mut shown) = match codec {
         SlateCodec::H264 => {
             let sets = encoder::parameter_sets(shape);
-            [0, 1].map(|idr_pic_id| {
-                let idr = encoder::encode_idr(&previous, idr_pic_id);
-                bitstream::length_prefixed(&[&sets.sps, &sets.pps, &idr])
-            })
+            let first = encoder::encode_idr_within(&source, 0, plan.tolerance);
+            let second = encoder::encode_idr_within(&source, 1, plan.tolerance);
+            let sample = |idr: &[u8]| bitstream::length_prefixed(&[&sets.sps, &sets.pps, idr]);
+            ([sample(&first.nal), sample(&second.nal)], first.shown)
         }
         SlateCodec::Hevc => {
             let [vps, sps, pps] = hevc::parameter_sets(shape);
-            let idr = hevc::encode_idr(&previous);
-            let keyframe = bitstream::length_prefixed(&[&vps, &sps, &pps, &idr]);
-            [keyframe.clone(), keyframe]
+            let idr = hevc::encode_idr_within(&source, plan.tolerance);
+            let keyframe = bitstream::length_prefixed(&[&vps, &sps, &pps, &idr.nal]);
+            ([keyframe.clone(), keyframe], idr.shown)
         }
     };
-    let mut deltas = Vec::with_capacity(frame_count - 1);
-    for index in 1..frame_count {
+    let mut deltas = Vec::with_capacity(plan.frames - 1);
+    for index in 1..plan.frames {
         let canvas = render(index);
         // Only the animated rows change between frames.
-        let frame = canvas.to_yuv420_after(&previous_canvas, &previous);
-        let picture = match codec {
-            SlateCodec::H264 => encoder::encode_p(&frame, &previous, index as u32),
-            SlateCodec::Hevc => hevc::encode_p(&frame, &previous, index as u32),
+        let frame = canvas.to_yuv420_after(&source_canvas, &source);
+        let frame_num = index as u32;
+        let coded = match codec {
+            SlateCodec::H264 => encoder::encode_p_within(&frame, &shown, frame_num, plan.tolerance),
+            SlateCodec::Hevc => hevc::encode_p_within(&frame, &shown, frame_num, plan.tolerance),
         };
-        deltas.push(bitstream::length_prefixed(&[&picture]));
-        (previous_canvas, previous) = (canvas, frame);
+        deltas.push(bitstream::length_prefixed(&[&coded.nal]));
+        shown = coded.shown;
+        (source_canvas, source) = (canvas, frame);
     }
-
-    Ok(SlateLoop {
-        keyframes,
-        deltas,
-        shape,
-    })
+    Interval { keyframes, deltas }
 }
 
 /// A legacy FLV H.264 sequence-header tag describing a `width` x `height`
@@ -255,8 +303,8 @@ fn ffmpeg_is_available(check: &str) -> bool {
     found
 }
 
-fn frames_per_loop(fps: u32) -> usize {
-    (fps as usize * LOOP_MS / 1000).max(1)
+fn frames_per_interval(fps: u32) -> usize {
+    (fps as usize * KEYFRAME_INTERVAL_MS / 1000).max(1)
 }
 
 #[cfg(test)]
@@ -274,18 +322,28 @@ mod tests {
         }
     }
 
+    /// A flat theme loops in one 2 s keyframe interval, a soft one in four;
+    /// every interval is 2 s of frames, and the two H.264 keyframes of each
+    /// differ (their idr_pic_id).
     #[test]
-    fn loop_is_one_keyframe_interval_long() {
+    fn loops_are_whole_keyframe_intervals() {
         let shape = StreamShape {
             width: 320,
             height: 180,
             fps: 30,
         };
-        let slate = build_loop(&settings(SlateTheme::Arcade), shape, SlateCodec::H264).unwrap();
-        assert_eq!(1 + slate.deltas.len(), 60);
-        assert_ne!(slate.keyframes[0], slate.keyframes[1], "idr_pic_id differs");
-        let hevc = build_loop(&settings(SlateTheme::Arcade), shape, SlateCodec::Hevc).unwrap();
-        assert_eq!(1 + hevc.deltas.len(), 60);
+        for (theme, intervals) in [(SlateTheme::Arcade, 1), (SlateTheme::Aurora, 4)] {
+            for codec in CODECS {
+                let slate = build_loop(&settings(theme), shape, codec).unwrap();
+                assert_eq!(slate.intervals.len(), intervals, "{theme:?} {codec:?}");
+                for interval in &slate.intervals {
+                    assert_eq!(1 + interval.deltas.len(), 60, "{theme:?} {codec:?}");
+                    if codec == SlateCodec::H264 {
+                        assert_ne!(interval.keyframes[0], interval.keyframes[1]);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -301,17 +359,17 @@ mod tests {
             // VPS, SPS, PPS, IDR_N_LP.
             (SlateCodec::Hevc, vec![32, 33, 34, 20]),
         ] {
-            let slate = build_loop(&settings(SlateTheme::Whisper), shape, codec).unwrap();
+            let slate = build_loop(&settings(SlateTheme::Tide), shape, codec).unwrap();
             let types = |sample: &[u8]| {
                 nal_units(sample)
                     .iter()
                     .map(|nal| nal_type(codec, nal))
                     .collect::<Vec<_>>()
             };
-            for keyframe in &slate.keyframes {
+            for keyframe in slate.intervals.iter().flat_map(|i| &i.keyframes) {
                 assert_eq!(types(keyframe), keyframe_types, "{codec:?} keyframe");
             }
-            for delta in &slate.deltas {
+            for delta in slate.intervals.iter().flat_map(|i| &i.deltas) {
                 // A non-IDR slice in H.264, TRAIL_R in HEVC: both type 1.
                 assert_eq!(
                     types(delta),
@@ -370,10 +428,14 @@ mod tests {
             .flat_map(|theme| CODECS.map(|codec| (theme, codec)));
         for (theme, codec) in every_pair {
             let slate = build_loop(&settings(theme), shape, codec).unwrap();
-            let loop_bytes: usize =
-                slate.keyframes[0].len() + slate.deltas.iter().map(Vec::len).sum::<usize>();
+            let loop_bytes: usize = slate
+                .intervals
+                .iter()
+                .map(|i| i.keyframes[0].len() + i.deltas.iter().map(Vec::len).sum::<usize>())
+                .sum();
+            let loop_ms = slate.intervals.len() * KEYFRAME_INTERVAL_MS;
             // Bits per millisecond are kbps.
-            let kbps = loop_bytes * 8 / LOOP_MS;
+            let kbps = loop_bytes * 8 / loop_ms;
             assert!(
                 kbps < max_kbps,
                 "{theme:?} {codec:?} loop at {width}x{height} runs at {kbps} kbps"
@@ -405,7 +467,8 @@ mod tests {
     }
 
     /// Decode two replays of the loop with ffmpeg and require every pixel
-    /// to match what we rendered, in both codecs. Every theme at 320x180
+    /// to match what we rendered (soft themes: within their tolerance), in
+    /// both codecs. Every theme at 320x180
     /// (180 isn't whole macroblocks or CTBs), then one portrait 200x360 so
     /// a real decoder checks the cropping of the width too, then one
     /// 640x360 so larger text meets every block coding. Sizes stay small:
@@ -413,7 +476,7 @@ mod tests {
     /// simulations (`controller::user_sim`) running beside this test
     /// enough to fail them. Each ffmpeg run costs about half a second.
     #[test]
-    fn ffmpeg_decodes_the_loop_losslessly() {
+    fn ffmpeg_decodes_the_loop_as_rendered() {
         if !ffmpeg_is_available("the reconnect screen decode round trip") {
             return;
         }
@@ -434,9 +497,15 @@ mod tests {
                 let expected = expected_frames(&settings(theme), shape);
                 let what = format!("{theme:?} {codec:?} at {width}x{height}");
                 assert_eq!(decoded.len(), expected.len(), "{what}: frame count");
+                let worst = decoded
+                    .iter()
+                    .zip(&expected)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap_or(0);
                 assert!(
-                    decoded == expected,
-                    "{what}: decoded pixels differ from the render"
+                    worst <= theme.tolerance(),
+                    "{what}: decoded pixels are up to {worst} off the render"
                 );
             }
         }
@@ -509,13 +578,15 @@ mod tests {
             // drop any the encoder repeated.
             let after = without_parameter_sets(&stream[cut..], codec);
             let slate = build_loop(&settings(theme), shape, codec).unwrap();
-            let screen = annex_b_samples(std::iter::once(&slate.keyframes[0]).chain(&slate.deltas));
+            let interval = &slate.intervals[0];
+            let screen =
+                annex_b_samples(std::iter::once(&interval.keyframes[0]).chain(&interval.deltas));
             let spliced = [before, &screen[..], &after[..]].concat();
 
             let continuous = [before, &after[..]].concat();
             let alone = decode_with_ffmpeg(&continuous, shape.fps, codec, theme);
             let decoded = decode_with_ffmpeg(&spliced, shape.fps, codec, theme);
-            let loop_bytes = frames_per_loop(shape.fps) * frame_bytes;
+            let loop_bytes = frames_per_interval(shape.fps) * frame_bytes;
             let before_bytes = STAND_IN_GOP * frame_bytes;
             assert_eq!(
                 decoded.len(),
@@ -677,10 +748,15 @@ mod tests {
         out
     }
 
-    /// Two loop replays as an Annex B elementary stream.
+    /// Two loop replays as an Annex B elementary stream, keyframes
+    /// alternating as a hold sends them.
     fn annex_b(slate: &SlateLoop) -> Vec<u8> {
-        let replay = |keyframe| std::iter::once(keyframe).chain(&slate.deltas);
-        annex_b_samples(slate.keyframes.iter().flat_map(replay))
+        let count = slate.intervals.len();
+        let samples = (0..2 * count).flat_map(|sent| {
+            let interval = &slate.intervals[sent % count];
+            std::iter::once(&interval.keyframes[sent % 2]).chain(&interval.deltas)
+        });
+        annex_b_samples(samples)
     }
 
     /// Raw H.264 and HEVC carry no timestamps, so the input rate is given
@@ -939,7 +1015,7 @@ mod tests {
     /// The rendered frames, cropped to the visible size, twice over.
     fn expected_frames(settings: &CrashProtection, shape: StreamShape) -> Vec<u8> {
         let style = screen_style(settings);
-        let frame_count = frames_per_loop(shape.fps);
+        let frame_count = frames_per_interval(shape.fps) * settings.theme.loop_intervals();
         let mut one_loop = Vec::new();
         for index in 0..frame_count {
             let mut canvas = Canvas::new(shape.width, shape.height, style.background);

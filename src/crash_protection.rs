@@ -21,7 +21,7 @@ const SUBLINE_DEFAULT: &str = "The stream will be back in a moment";
 pub const KEY_PREFIX: &str = "crash_protection.";
 
 /// Look of the reconnect screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SlateTheme {
     /// Minimal centred text with three pulsing dots.
     Whisper,
@@ -34,11 +34,22 @@ pub enum SlateTheme {
     /// Broadcast lower third: text on the left with an accent bar and a
     /// sliding progress stripe.
     Studio,
+    /// Soft glows in the accent and two neighbouring hues drifting round a
+    /// calm centre.
+    Aurora,
+    /// A soft ring of light breathing round the text, a brighter arc
+    /// travelling along it.
+    Halo,
+    /// Slow diagonal swells of light rolling across, calm round the text.
+    Tide,
 }
 
 impl SlateTheme {
     /// Every theme, in the order the dashboard offers them.
-    pub const ALL: [SlateTheme; 5] = [
+    pub const ALL: [SlateTheme; 8] = [
+        SlateTheme::Aurora,
+        SlateTheme::Halo,
+        SlateTheme::Tide,
         SlateTheme::Whisper,
         SlateTheme::Beacon,
         SlateTheme::Orbit,
@@ -53,6 +64,9 @@ impl SlateTheme {
             SlateTheme::Beacon => "beacon",
             SlateTheme::Orbit => "orbit",
             SlateTheme::Studio => "studio",
+            SlateTheme::Aurora => "aurora",
+            SlateTheme::Halo => "halo",
+            SlateTheme::Tide => "tide",
         }
     }
 
@@ -64,6 +78,9 @@ impl SlateTheme {
             SlateTheme::Beacon => "Beacon",
             SlateTheme::Orbit => "Orbit",
             SlateTheme::Studio => "Studio",
+            SlateTheme::Aurora => "Aurora",
+            SlateTheme::Halo => "Halo",
+            SlateTheme::Tide => "Tide",
         }
     }
 
@@ -79,9 +96,53 @@ impl SlateTheme {
             SlateTheme::Beacon => Rgb::new(0x0b, 0x12, 0x16),
             SlateTheme::Orbit => Rgb::new(0x10, 0x10, 0x16),
             SlateTheme::Studio => Rgb::new(0x0d, 0x10, 0x18),
+            SlateTheme::Aurora => Rgb::new(0x0a, 0x0c, 0x12),
+            SlateTheme::Halo => Rgb::new(0x0b, 0x0b, 0x10),
+            SlateTheme::Tide => Rgb::new(0x09, 0x0e, 0x14),
         }
     }
+
+    /// Whether the theme paints soft light (gradients, glows). Those are
+    /// encoded within `SOFT_TOLERANCE` of the render, the rest exactly.
+    pub fn is_soft(self) -> bool {
+        matches!(
+            self,
+            SlateTheme::Aurora | SlateTheme::Halo | SlateTheme::Tide
+        )
+    }
+
+    /// How far a decoded sample may sit from the render (of 255).
+    pub fn tolerance(self) -> u8 {
+        if self.is_soft() {
+            SOFT_TOLERANCE
+        } else {
+            0
+        }
+    }
+
+    /// How many 2 s keyframe intervals one loop of the animation spans:
+    /// soft light moves slowly, so it needs a longer loop to look calm.
+    pub fn loop_intervals(self) -> usize {
+        if self.is_soft() {
+            SOFT_LOOP_INTERVALS
+        } else {
+            1
+        }
+    }
+
+    /// The flat theme a soft one stands in with while its loop is still
+    /// being built.
+    pub fn quick_stand_in(self) -> Option<SlateTheme> {
+        self.is_soft().then_some(SlateTheme::Whisper)
+    }
 }
+
+/// Two levels of 255: below what a viewer can see on a gradient, and what
+/// keeps a soft 1080p screen near 100 to 300 kbps in HEVC and 250 to 700
+/// in H.264 (measured, `slate::tests::measure_soft_loop`).
+const SOFT_TOLERANCE: u8 = 2;
+/// Four 2 s intervals: an 8 s loop.
+const SOFT_LOOP_INTERVALS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrashProtection {

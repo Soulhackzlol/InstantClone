@@ -311,6 +311,7 @@ fn level_idc(shape: StreamShape) -> u32 {
 
 /// IDR picture, exact: every block intra or PCM. Consecutive HEVC IDRs
 /// need no distinguishing id, so a replayed loop can reuse it as is.
+#[cfg(test)]
 pub fn encode_idr(frame: &YuvFrame) -> Vec<u8> {
     encode_idr_within(frame, 0).nal
 }
@@ -333,6 +334,7 @@ pub fn encode_idr_within(frame: &YuvFrame, tolerance: u8) -> Coded {
 /// P picture `poc` pictures after the IDR, exact: blocks identical to
 /// `previous` are skipped, the rest are intra coded. Every P picture is a
 /// reference so the next one can skip against it.
+#[cfg(test)]
 pub fn encode_p(frame: &YuvFrame, previous: &YuvFrame, poc: u32) -> Vec<u8> {
     encode_p_within(frame, previous, poc, 0).nal
 }

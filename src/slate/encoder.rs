@@ -179,6 +179,7 @@ pub struct Coded {
 
 /// IDR picture, exact. Consecutive IDRs must differ in `idr_pic_id`, so a
 /// loop that replays its keyframe alternates between two ids.
+#[cfg(test)]
 pub fn encode_idr(frame: &YuvFrame, idr_pic_id: u32) -> Vec<u8> {
     encode_idr_within(frame, idr_pic_id, 0).nal
 }
@@ -207,6 +208,7 @@ pub fn encode_idr_within(frame: &YuvFrame, idr_pic_id: u32, tolerance: u8) -> Co
 /// P picture, exact: blocks identical to `previous` are skipped, the rest
 /// are intra coded. Every P picture is a reference so the next one can
 /// skip against it; `frame_num` counts up from 1 after the IDR.
+#[cfg(test)]
 pub fn encode_p(frame: &YuvFrame, previous: &YuvFrame, frame_num: u32) -> Vec<u8> {
     encode_p_within(frame, previous, frame_num, 0).nal
 }
