@@ -41,25 +41,61 @@ pub fn transform(residual: &[i32], size: usize) -> Vec<i64> {
     let log2 = size.trailing_zeros() as i64;
     let first_shift = log2 - 1;
     let second_shift = log2 + 6;
+    let mut line = [0i64; 32];
+    let mut sums = [0i64; 32];
     let mut rows = vec![0i64; size * size];
     for y in 0..size {
+        for (i, value) in line[..size].iter_mut().enumerate() {
+            *value = i64::from(residual[y * size + i]);
+        }
+        forward_1d(&line[..size], &mut sums[..size]);
         for k in 0..size {
-            let sum: i64 = (0..size)
-                .map(|i| basis(size, k, i) * i64::from(residual[y * size + i]))
-                .sum();
-            rows[y * size + k] = (sum + (1 << (first_shift - 1))) >> first_shift;
+            rows[y * size + k] = (sums[k] + (1 << (first_shift - 1))) >> first_shift;
         }
     }
     let mut coefficients = vec![0i64; size * size];
     for x in 0..size {
+        for (j, value) in line[..size].iter_mut().enumerate() {
+            *value = rows[j * size + x];
+        }
+        forward_1d(&line[..size], &mut sums[..size]);
         for k in 0..size {
-            let sum: i64 = (0..size)
-                .map(|j| basis(size, k, j) * rows[j * size + x])
-                .sum();
-            coefficients[k * size + x] = (sum + (1 << (second_shift - 1))) >> second_shift;
+            coefficients[k * size + x] = (sums[k] + (1 << (second_shift - 1))) >> second_shift;
         }
     }
     coefficients
+}
+
+/// `output[k]` = the sum over `i` of basis row `k` times `input[i]`: one
+/// dimension of the transform, by partial butterfly. The even rows of an
+/// HEVC transform are symmetric and are the rows of the half-size one, the
+/// odd rows antisymmetric, so each size is a half-size transform of the
+/// ends' sums plus a quarter of the products for their differences. The
+/// same integer sums as multiplying by the matrix, in a third of the work
+/// at 32 points; the encoder spent most of a loop's time here.
+fn forward_1d(input: &[i64], output: &mut [i64]) {
+    let size = input.len();
+    if size == 1 {
+        output[0] = basis(1, 0, 0) * input[0];
+        return;
+    }
+    let half = size / 2;
+    let (mut sums, mut differences, mut even) = ([0i64; 16], [0i64; 16], [0i64; 16]);
+    for i in 0..half {
+        sums[i] = input[i] + input[size - 1 - i];
+        differences[i] = input[i] - input[size - 1 - i];
+    }
+    forward_1d(&sums[..half], &mut even[..half]);
+    let row_step = 32 / size;
+    for m in 0..half {
+        output[2 * m] = even[m];
+        let row = &BASIS[(2 * m + 1) * row_step][..half];
+        output[2 * m + 1] = row
+            .iter()
+            .zip(&differences[..half])
+            .map(|(b, d)| i64::from(*b) * d)
+            .sum();
+    }
 }
 
 /// The levels of `coefficients` (from `transform`) at `qp`.
@@ -242,8 +278,8 @@ pub fn write(
 ) {
     let log2 = size.trailing_zeros() as usize;
     debug_assert!(
-        log2 >= 4 || (is_chroma && log2 == 3),
-        "luma blocks here are 16 or 32, chroma 8 or 16"
+        (2..=5).contains(&log2) && !(is_chroma && log2 == 5),
+        "luma blocks are 4 to 32, chroma 4 to 16"
     );
     let groups = size / 4;
     let group_scan = diagonal_scan(groups);
@@ -309,13 +345,23 @@ pub fn write(
             continue;
         }
 
-        // significant_coeff_flag, highest scan position first.
+        // significant_coeff_flag, highest scan position first. A 4x4
+        // block takes each position's context from a table instead.
         let previous = usize::from(right) + 2 * usize::from(below);
-        let mut offset = if is_chroma { 27 } else { 0 };
-        offset += match (is_chroma, log2) {
-            (false, _) => 21 + if group > 0 { 3 } else { 0 },
-            (true, 3) => 9,
-            (true, _) => 12,
+        let plane_offset = if is_chroma { 27 } else { 0 };
+        let offset = plane_offset
+            + match (is_chroma, log2) {
+                (false, 3) => 9 + if group > 0 { 3 } else { 0 },
+                (false, _) => 21 + if group > 0 { 3 } else { 0 },
+                (true, 3) => 9,
+                (true, _) => 12,
+            };
+        let significance_ctx = |x: usize, y: usize| {
+            if log2 == 2 {
+                plane_offset + SIGNIFICANCE_4X4[4 * y + x]
+            } else {
+                offset + significance_increment(previous, x, y)
+            }
         };
         let mut significant: Vec<usize> = Vec::with_capacity(16);
         let start = if group == last_group {
@@ -327,7 +373,7 @@ pub fn write(
         for n in (1..=start.max(0) as usize).rev() {
             let (x, y) = within[n];
             let is_set = level_at(group, n) != 0;
-            let ctx = offset + significance_increment(previous, x, y);
+            let ctx = significance_ctx(x, y);
             cabac.decision(&mut contexts.significant[ctx], is_set);
             if is_set {
                 significant.push(n);
@@ -359,6 +405,10 @@ pub fn write(
         });
     }
 }
+
+/// sigCtx of each position of a 4x4 block, raster (ctxIdxMap, 9.3.4.2.5).
+/// The last position is never coded: a block's last level is signalled.
+const SIGNIFICANCE_4X4: [usize; 16] = [0, 1, 4, 5, 2, 3, 4, 5, 6, 6, 8, 8, 7, 7, 8, 8];
 
 /// sigCtx inside a sub-block (9.3.4.2.5) for a position other than its
 /// first, from which neighbouring sub-blocks have levels.
@@ -514,6 +564,52 @@ mod tests {
         assert_eq!(last_position_parts(8), (6, 0, 2));
         assert_eq!(last_position_parts(12), (7, 0, 2));
         assert_eq!(last_position_parts(31), (9, 7, 3));
+    }
+
+    /// The forward transform as the matrix product it stands for.
+    fn transform_by_matrix(residual: &[i32], size: usize) -> Vec<i64> {
+        let log2 = size.trailing_zeros() as i64;
+        let (first_shift, second_shift) = (log2 - 1, log2 + 6);
+        let mut rows = vec![0i64; size * size];
+        for y in 0..size {
+            for k in 0..size {
+                let sum: i64 = (0..size)
+                    .map(|i| basis(size, k, i) * i64::from(residual[y * size + i]))
+                    .sum();
+                rows[y * size + k] = (sum + (1 << (first_shift - 1))) >> first_shift;
+            }
+        }
+        let mut coefficients = vec![0i64; size * size];
+        for x in 0..size {
+            for k in 0..size {
+                let sum: i64 = (0..size)
+                    .map(|j| basis(size, k, j) * rows[j * size + x])
+                    .sum();
+                coefficients[k * size + x] = (sum + (1 << (second_shift - 1))) >> second_shift;
+            }
+        }
+        coefficients
+    }
+
+    /// The butterfly gives exactly what multiplying by the matrix does, for
+    /// any residual at every size.
+    #[test]
+    fn the_fast_transform_is_the_matrix_product() {
+        let mut seed = 12_345u32;
+        let mut sample = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 16) as i32 % 511 - 255
+        };
+        for size in [4, 8, 16, 32] {
+            for _ in 0..25 {
+                let residual: Vec<i32> = (0..size * size).map(|_| sample()).collect();
+                assert_eq!(
+                    transform(&residual, size),
+                    transform_by_matrix(&residual, size),
+                    "{size}x{size}"
+                );
+            }
+        }
     }
 
     /// Quantising and rebuilding a ramp at a fine QP returns it to within a

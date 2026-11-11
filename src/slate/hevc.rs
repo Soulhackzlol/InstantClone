@@ -30,6 +30,9 @@ use super::bitstream::{self, BitWriter};
 use super::cabac::{CabacWriter, Context};
 use super::encoder::{Coded, StreamShape};
 use super::hevc_residual::{self, ResidualContexts};
+use transform_tree::{Coefficients, Residual};
+
+mod transform_tree;
 use super::raster::YuvFrame;
 
 /// Coding tree block side. The coded frame is whole CTBs (the SPS crops
@@ -182,7 +185,7 @@ fn sps_rbsp(shape: StreamShape, level: u32) -> Vec<u8> {
     w.ue(2); // log2_diff_max_min_luma_coding_block_size: CTB 32
     w.ue(0); // log2_min_luma_transform_block_size_minus2: 4
     w.ue(3); // log2_diff_max_min_luma_transform_block_size: 32
-    w.ue(0); // max_transform_hierarchy_depth_inter
+    w.ue(transform_tree::MAX_INTER_DEPTH as u32); // max_transform_hierarchy_depth_inter
     w.ue(0); // max_transform_hierarchy_depth_intra
     w.bit(false); // scaling_list_enabled_flag
     w.bit(false); // amp_enabled_flag
@@ -385,14 +388,6 @@ struct Block {
     size: usize,
 }
 
-/// The quantised levels of one coding unit, per plane; `None` for a plane
-/// coded without residual.
-struct Residual {
-    qp: i32,
-    luma: Option<Vec<i32>>,
-    chroma: [Option<Vec<i32>>; 2],
-}
-
 enum CuCoding {
     Skip,
     Predicted {
@@ -421,6 +416,8 @@ const HEADER_BITS: usize = 6;
 /// A carried-over block this cheap is taken without trying intra: intra
 /// could save a few bits at most, for the cost of four predictions.
 const GOOD_ENOUGH_BITS: usize = HEADER_BITS + 32;
+/// Residual this cheap whole is not tried split as well.
+const CHEAP_RESIDUAL_BITS: usize = 48;
 
 /// A block's samples: luma, then Cb and Cr.
 #[derive(Clone)]
@@ -451,10 +448,12 @@ struct Contexts {
     merge_flag: Context,
     prev_intra_luma_pred: Context,
     intra_chroma_pred_mode: Context,
-    /// ctxInc 1: the transform tree is never split (trafoDepth 0).
-    cbf_luma: Context,
-    /// ctxInc 0 (trafoDepth 0), shared by cbf_cb and cbf_cr.
-    cbf_chroma: Context,
+    /// split_transform_flag, by 5 - log2 of the block side.
+    split_transform: [Context; 3],
+    /// cbf_luma: ctxInc 1 at trafoDepth 0, else 0.
+    cbf_luma: [Context; 2],
+    /// cbf_cb and cbf_cr share theirs, by trafoDepth.
+    cbf_chroma: [Context; 3],
     /// cu_qp_delta_abs: its first bin, then the rest.
     cu_qp_delta: [Context; 2],
     residual: ResidualContexts,
@@ -473,8 +472,9 @@ impl Contexts {
             merge_flag: Context::new(110, SLICE_QP),
             prev_intra_luma_pred: pick(184, 154),
             intra_chroma_pred_mode: pick(63, 152),
-            cbf_luma: pick(141, 111),
-            cbf_chroma: pick(94, 149),
+            split_transform: [pick(153, 124), pick(138, 138), pick(138, 94)],
+            cbf_luma: [pick(111, 153), pick(141, 111)],
+            cbf_chroma: [pick(94, 149), pick(138, 107), pick(182, 167)],
             cu_qp_delta: [154, 154].map(|value| Context::new(value, SLICE_QP)),
             residual: ResidualContexts::new(is_p_slice, SLICE_QP),
         }
@@ -653,11 +653,11 @@ impl<'a> PictureCoder<'a> {
             !source.luma.within(&current.luma, self.tolerance),
             !source.chroma.within(&current.chroma, self.tolerance),
         ];
+        let depths = 0..=transform_tree::MAX_INTER_DEPTH;
         let (residual, shown, bits) =
-            self.with_residual(block, source, current, needs, fixed_qp)?;
+            self.with_residual(block, (source, current), needs, fixed_qp, depths)?;
         // Merged 2Nx2N with no residual would be a skip: never coded so.
-        let has_levels = residual.luma.is_some() || residual.chroma.iter().any(Option::is_some);
-        has_levels.then_some(Decision {
+        residual.has_levels().then_some(Decision {
             coding: CuCoding::CarriedOver { residual },
             shown,
             bits: bits + HEADER_BITS,
@@ -717,7 +717,7 @@ impl<'a> PictureCoder<'a> {
             });
         }
         let needs = [!luma_close, !chroma_close];
-        match self.with_residual(block, source, &prediction, needs, fixed_qp) {
+        match self.with_residual(block, (source, &prediction), needs, fixed_qp, 0..=0) {
             Some((residual, shown, bits)) => Some(Decision {
                 coding: CuCoding::Predicted {
                     luma: luma_mode,
@@ -733,16 +733,17 @@ impl<'a> PictureCoder<'a> {
 
     /// `prediction` corrected by residual in the planes `needs` names
     /// (luma, chroma), at the coarsest QP on the ladder (or `fixed_qp`)
-    /// that lands within the tolerance: the residual, what a decoder shows
-    /// and the residual's estimated bits. `None` when no QP does it for
-    /// fewer bits than raw samples.
+    /// that lands within the tolerance, with the transform tree split as
+    /// many times (of `depths`) as costs least: the residual, what a
+    /// decoder shows and the residual's estimated bits. `None` when no QP
+    /// does it for fewer bits than raw samples.
     fn with_residual(
         &mut self,
         block: Block,
-        source: &Samples,
-        prediction: &Samples,
+        (source, prediction): (&Samples, &Samples),
         needs: [bool; 2],
         fixed_qp: Option<i32>,
+        depths: std::ops::RangeInclusive<usize>,
     ) -> Option<(Residual, Samples, usize)> {
         let ladder: Vec<(usize, i32)> = match fixed_qp {
             Some(qp) => vec![(self.ladder_step, qp)],
@@ -754,19 +755,32 @@ impl<'a> PictureCoder<'a> {
                 .collect(),
         };
         let pcm_bits = PCM_BITS * (block.size / SPLIT_CU).pow(2);
-        let coefficients = Coefficients::of(source, prediction, needs);
+        // Each split's transforms, made the first time a QP needs them.
+        let mut splits: Vec<(usize, Option<Coefficients>)> =
+            depths.map(|depth| (depth, None)).collect();
         for (step, qp) in ladder {
-            let Some((residual, shown)) =
-                self.attempt(source.clone(), prediction, &coefficients, qp)
-            else {
+            let mut cheapest: Option<(Residual, Samples, usize)> = None;
+            for (depth, coefficients) in &mut splits {
+                let coefficients = coefficients
+                    .get_or_insert_with(|| Coefficients::of(source, prediction, needs, *depth));
+                if let Some((residual, shown)) = self.attempt(source, prediction, coefficients, qp)
+                {
+                    let bits = residual.estimated_bits();
+                    if cheapest.as_ref().is_none_or(|(_, _, best)| bits < *best) {
+                        cheapest = Some((residual, shown, bits));
+                    }
+                }
+                // Splitting can only save a few bits on a cheap block.
+                if cheapest
+                    .as_ref()
+                    .is_some_and(|(_, _, bits)| *bits <= CHEAP_RESIDUAL_BITS)
+                {
+                    break;
+                }
+            }
+            let Some((residual, shown, bits)) = cheapest else {
                 continue;
             };
-            let bits: usize = residual
-                .luma
-                .iter()
-                .chain(residual.chroma.iter().flatten())
-                .map(|levels| hevc_residual::estimated_bits(levels))
-                .sum();
             if bits >= pcm_bits {
                 break;
             }
@@ -803,40 +817,55 @@ impl<'a> PictureCoder<'a> {
     /// decoder will. `None` when a sample lands outside the tolerance.
     fn attempt(
         &self,
-        source: Samples,
+        source: &Samples,
         prediction: &Samples,
         coefficients: &Coefficients,
         qp: i32,
     ) -> Option<(Residual, Samples)> {
-        let code = |coefficients: &[i64], prediction: &[u8], qp: i32| {
-            let size = prediction.len().isqrt();
-            let levels = hevc_residual::quantize(coefficients, size, qp);
-            let rebuilt = hevc_residual::rebuild(&levels, size, qp);
+        let unit = prediction.luma.len().isqrt();
+        let (luma_side, chroma_side) = transform_tree::block_sides(unit, coefficients.depth);
+        // Each block's levels, and the plane as a decoder rebuilds it.
+        let code = |blocks: &[Vec<i64>], prediction: &[u8], side: usize, qp: i32| {
+            let mut levels = Vec::with_capacity(blocks.len());
+            let mut rebuilt = Vec::with_capacity(blocks.len());
+            for block in blocks {
+                let quantized = hevc_residual::quantize(block, side, qp);
+                let has_levels = quantized.iter().any(|level| *level != 0);
+                rebuilt.push(if has_levels {
+                    hevc_residual::rebuild(&quantized, side, qp)
+                } else {
+                    vec![0; side * side]
+                });
+                levels.push(has_levels.then_some(quantized));
+            }
+            let whole = prediction.len().isqrt();
+            let rebuilt = transform_tree::join_blocks(&rebuilt, side, whole);
             let shown: Vec<u8> = prediction
                 .iter()
                 .zip(&rebuilt)
                 .map(|(p, r)| (i32::from(*p) + r).clamp(0, 255) as u8)
                 .collect();
-            let has_levels = levels.iter().any(|level| *level != 0);
-            (has_levels.then_some(levels), shown)
+            (levels, shown)
         };
+        let blocks_of = |side: usize, whole: usize| vec![None; (whole / side).pow(2)];
         let mut shown = prediction.clone();
         let mut residual = Residual {
             qp,
-            luma: None,
-            chroma: [None, None],
+            depth: coefficients.depth,
+            luma: blocks_of(luma_side, unit),
+            chroma: [0, 1].map(|_| blocks_of(chroma_side, unit / 2)),
         };
         if let Some(luma) = &coefficients.luma {
-            (residual.luma, shown.luma) = code(luma, &prediction.luma, qp);
+            (residual.luma, shown.luma) = code(luma, &prediction.luma, luma_side, qp);
         }
         let chroma_qp = hevc_residual::chroma_qp(qp);
         for (plane, chroma) in coefficients.chroma.iter().enumerate() {
             if let Some(chroma) = chroma {
                 (residual.chroma[plane], shown.chroma[plane]) =
-                    code(chroma, &prediction.chroma[plane], chroma_qp);
+                    code(chroma, &prediction.chroma[plane], chroma_side, chroma_qp);
             }
         }
-        self.is_close(&source, &shown).then_some((residual, shown))
+        self.is_close(source, &shown).then_some((residual, shown))
     }
 
     fn is_close(&self, a: &Samples, b: &Samples) -> bool {
@@ -865,7 +894,7 @@ impl<'a> PictureCoder<'a> {
                 // has residual by definition, so no rqt_root_cbf either.
                 self.cabac.decision(&mut self.contexts.part_mode, true);
                 self.cabac.decision(&mut self.contexts.merge_flag, true);
-                self.code_transform_unit(block, Some(residual), true);
+                self.code_transform_tree(block, Some(residual), true);
                 None
             }
             CuCoding::Pcm => {
@@ -882,7 +911,7 @@ impl<'a> PictureCoder<'a> {
                     self.cabac.terminate(false);
                 }
                 self.code_intra_modes(block, *luma, *chroma);
-                self.code_transform_unit(block, residual.as_ref(), false);
+                self.code_transform_tree(block, residual.as_ref(), false);
                 Some(*luma)
             }
         };
@@ -897,45 +926,6 @@ impl<'a> PictureCoder<'a> {
                 let index = self.area_index(x, y);
                 self.areas[index] = state;
             }
-        }
-    }
-
-    /// The coded block flags, the QP delta when this is the CTU's first
-    /// residual, then each plane's levels.
-    fn code_transform_unit(&mut self, block: Block, residual: Option<&Residual>, is_inter: bool) {
-        let (luma, chroma) = match residual {
-            Some(residual) => (
-                residual.luma.as_ref(),
-                [0, 1].map(|p| residual.chroma[p].as_ref()),
-            ),
-            None => (None, [None, None]),
-        };
-        // cbf_cb, cbf_cr, cbf_luma. An inter unit with neither chroma flag
-        // has luma residual: its cbf_luma is inferred (7.3.8.8).
-        self.cabac
-            .decision(&mut self.contexts.cbf_chroma, chroma[0].is_some());
-        self.cabac
-            .decision(&mut self.contexts.cbf_chroma, chroma[1].is_some());
-        let is_luma_inferred = is_inter && chroma.iter().all(Option::is_none);
-        if !is_luma_inferred {
-            self.cabac
-                .decision(&mut self.contexts.cbf_luma, luma.is_some());
-        }
-        let Some(residual) = residual else {
-            return;
-        };
-        if luma.is_none() && chroma.iter().all(Option::is_none) {
-            return;
-        }
-        if !self.is_qp_coded {
-            self.code_qp_delta(residual.qp);
-        }
-        let contexts = &mut self.contexts.residual;
-        if let Some(levels) = luma {
-            hevc_residual::write(&mut self.cabac, contexts, levels, block.size, false);
-        }
-        for levels in chroma.into_iter().flatten() {
-            hevc_residual::write(&mut self.cabac, contexts, levels, block.size / 2, true);
         }
     }
 
@@ -1158,34 +1148,6 @@ fn write_exp_golomb(cabac: &mut CabacWriter, mut value: u32) {
     }
     cabac.bypass_bits(0, 1);
     cabac.bypass_bits(value, k);
-}
-
-/// The transformed residual of each plane that needs one: luma, and Cb
-/// and Cr together.
-struct Coefficients {
-    luma: Option<Vec<i64>>,
-    chroma: [Option<Vec<i64>>; 2],
-}
-
-impl Coefficients {
-    /// Transform what `prediction` misses of `source` in the planes
-    /// `needs` names (luma, chroma).
-    fn of(source: &Samples, prediction: &Samples, [luma, chroma]: [bool; 2]) -> Self {
-        let transformed = |source: &[u8], prediction: &[u8]| {
-            let residual: Vec<i32> = source
-                .iter()
-                .zip(prediction)
-                .map(|(s, p)| i32::from(*s) - i32::from(*p))
-                .collect();
-            hevc_residual::transform(&residual, source.len().isqrt())
-        };
-        Self {
-            luma: luma.then(|| transformed(&source.luma, &prediction.luma)),
-            chroma: [0, 1].map(|plane| {
-                chroma.then(|| transformed(&source.chroma[plane], &prediction.chroma[plane]))
-            }),
-        }
-    }
 }
 
 /// A colour plane, and where a block's samples sit in it.
