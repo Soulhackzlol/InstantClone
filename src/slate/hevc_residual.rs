@@ -31,13 +31,14 @@ fn basis(size: usize, k: usize, i: usize) -> i64 {
     i64::from(BASIS[k * (32 / size)][i])
 }
 
-/// Transform and quantise a `size` x `size` residual (raster, row by row)
-/// at `qp`. The levels come back raster too: `levels[y * size + x]` has
-/// horizontal frequency x and vertical frequency y.
-pub fn quantize(residual: &[i32], size: usize, qp: i32) -> Vec<i32> {
+/// The forward transform of a `size` x `size` residual (raster, row by
+/// row): the reference encoder's two passes, whose shifts leave the
+/// coefficients at the scale `QUANT_SCALE` expects. They come back raster
+/// too: `[y * size + x]` has horizontal frequency x and vertical frequency
+/// y. It doesn't depend on the QP, so a block tried at several QPs is
+/// transformed once.
+pub fn transform(residual: &[i32], size: usize) -> Vec<i64> {
     let log2 = size.trailing_zeros() as i64;
-    // The forward transform of the reference encoder: two passes whose
-    // shifts leave the coefficients at the scale `QUANT_SCALE` expects.
     let first_shift = log2 - 1;
     let second_shift = log2 + 6;
     let mut rows = vec![0i64; size * size];
@@ -49,22 +50,36 @@ pub fn quantize(residual: &[i32], size: usize, qp: i32) -> Vec<i32> {
             rows[y * size + k] = (sum + (1 << (first_shift - 1))) >> first_shift;
         }
     }
-    let qbits = 21 + i64::from(qp / 6) - log2;
-    // Intra rounding: a third, leaning towards zero to save bits.
-    let rounding = 171 << (qbits - 9);
-    let factor = QUANT_SCALE[(qp % 6) as usize];
-    let mut levels = vec![0; size * size];
+    let mut coefficients = vec![0i64; size * size];
     for x in 0..size {
         for k in 0..size {
             let sum: i64 = (0..size)
                 .map(|j| basis(size, k, j) * rows[j * size + x])
                 .sum();
-            let coefficient = (sum + (1 << (second_shift - 1))) >> second_shift;
-            let level = ((coefficient.abs() * factor + rounding) >> qbits) as i32;
-            levels[k * size + x] = if coefficient < 0 { -level } else { level };
+            coefficients[k * size + x] = (sum + (1 << (second_shift - 1))) >> second_shift;
         }
     }
-    levels
+    coefficients
+}
+
+/// The levels of `coefficients` (from `transform`) at `qp`.
+pub fn quantize(coefficients: &[i64], size: usize, qp: i32) -> Vec<i32> {
+    let log2 = size.trailing_zeros() as i64;
+    let qbits = 21 + i64::from(qp / 6) - log2;
+    // Intra rounding: a third, leaning towards zero to save bits.
+    let rounding = 171 << (qbits - 9);
+    let factor = QUANT_SCALE[(qp % 6) as usize];
+    coefficients
+        .iter()
+        .map(|coefficient| {
+            let level = ((coefficient.abs() * factor + rounding) >> qbits) as i32;
+            if *coefficient < 0 {
+                -level
+            } else {
+                level
+            }
+        })
+        .collect()
 }
 
 /// The residual a decoder rebuilds from `levels` (8.6.2 to 8.6.4).
@@ -77,12 +92,21 @@ pub fn rebuild(levels: &[i32], size: usize, qp: i32) -> Vec<i32> {
         .iter()
         .map(|level| clip16((i64::from(*level) * scale * FLAT_SCALE + (1 << (shift - 1))) >> shift))
         .collect();
-    // Columns first (vertical frequencies), then rows.
+    // Columns first (vertical frequencies), then rows. Most coefficients
+    // of a smooth block are zero: each sum runs over the ones that aren't,
+    // which gives the same result as the full sum, far faster.
+    let nonzero_in_column =
+        |x: usize| -> Vec<usize> { (0..size).filter(|k| scaled[k * size + x] != 0).collect() };
+    let live_columns: Vec<(usize, Vec<usize>)> = (0..size)
+        .map(|x| (x, nonzero_in_column(x)))
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect();
     let mut columns = vec![0i64; size * size];
-    for x in 0..size {
+    for (x, frequencies) in &live_columns {
         for y in 0..size {
-            let sum: i64 = (0..size)
-                .map(|k| basis(size, k, y) * scaled[k * size + x])
+            let sum: i64 = frequencies
+                .iter()
+                .map(|k| basis(size, *k, y) * scaled[k * size + x])
                 .sum();
             columns[y * size + x] = clip16((sum + 64) >> 7);
         }
@@ -90,8 +114,9 @@ pub fn rebuild(levels: &[i32], size: usize, qp: i32) -> Vec<i32> {
     let mut residual = vec![0; size * size];
     for y in 0..size {
         for x in 0..size {
-            let sum: i64 = (0..size)
-                .map(|k| basis(size, k, x) * columns[y * size + k])
+            let sum: i64 = live_columns
+                .iter()
+                .map(|(k, _)| basis(size, *k, x) * columns[y * size + k])
                 .sum();
             residual[y * size + x] = ((sum + 2048) >> 12) as i32;
         }
@@ -500,7 +525,8 @@ mod tests {
             let residual: Vec<i32> = (0..size * size)
                 .map(|at| (at % size) as i32 * 2 - (at / size) as i32 + 7)
                 .collect();
-            let rebuilt = rebuild(&quantize(&residual, size, 4), size, 4);
+            let levels = quantize(&transform(&residual, size), size, 4);
+            let rebuilt = rebuild(&levels, size, 4);
             let worst = residual
                 .iter()
                 .zip(&rebuilt)

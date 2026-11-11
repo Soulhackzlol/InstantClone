@@ -645,9 +645,10 @@ impl<'a> PictureCoder<'a> {
                 .collect(),
         };
         let pcm_bits = PCM_BITS * (block.size / SPLIT_CU).pow(2);
-        let needs = [!luma_close, !chroma_close];
+        let coefficients = Coefficients::of(&source, &prediction, [!luma_close, !chroma_close]);
         for (step, qp) in ladder {
-            let Some((residual, shown)) = self.attempt(block, &source, &prediction, needs, qp)
+            let Some((residual, shown)) =
+                self.attempt(source.clone(), &prediction, &coefficients, qp)
             else {
                 continue;
             };
@@ -696,24 +697,18 @@ impl<'a> PictureCoder<'a> {
             .map(|(mode, _)| (*mode, false))
     }
 
-    /// Quantise the residual of each plane in `needs` (luma, chroma) at
-    /// `qp` and rebuild it as a decoder will. `None` when a sample lands
-    /// outside the tolerance.
+    /// Quantise each plane's `coefficients` at `qp` and rebuild them as a
+    /// decoder will. `None` when a sample lands outside the tolerance.
     fn attempt(
         &self,
-        block: Block,
-        source: &Samples,
+        source: Samples,
         prediction: &Samples,
-        [luma_needs, chroma_needs]: [bool; 2],
+        coefficients: &Coefficients,
         qp: i32,
     ) -> Option<(Residual, Samples)> {
-        let code = |source: &[u8], prediction: &[u8], size: usize, qp: i32| {
-            let residual: Vec<i32> = source
-                .iter()
-                .zip(prediction)
-                .map(|(s, p)| i32::from(*s) - i32::from(*p))
-                .collect();
-            let levels = hevc_residual::quantize(&residual, size, qp);
+        let code = |coefficients: &[i64], prediction: &[u8], qp: i32| {
+            let size = prediction.len().isqrt();
+            let levels = hevc_residual::quantize(coefficients, size, qp);
             let rebuilt = hevc_residual::rebuild(&levels, size, qp);
             let shown: Vec<u8> = prediction
                 .iter()
@@ -729,21 +724,17 @@ impl<'a> PictureCoder<'a> {
             luma: None,
             chroma: [None, None],
         };
-        if luma_needs {
-            (residual.luma, shown.luma) = code(&source.luma, &prediction.luma, block.size, qp);
+        if let Some(luma) = &coefficients.luma {
+            (residual.luma, shown.luma) = code(luma, &prediction.luma, qp);
         }
-        if chroma_needs {
-            let chroma_qp = hevc_residual::chroma_qp(qp);
-            for plane in 0..2 {
-                (residual.chroma[plane], shown.chroma[plane]) = code(
-                    &source.chroma[plane],
-                    &prediction.chroma[plane],
-                    block.size / 2,
-                    chroma_qp,
-                );
+        let chroma_qp = hevc_residual::chroma_qp(qp);
+        for (plane, chroma) in coefficients.chroma.iter().enumerate() {
+            if let Some(chroma) = chroma {
+                (residual.chroma[plane], shown.chroma[plane]) =
+                    code(chroma, &prediction.chroma[plane], chroma_qp);
             }
         }
-        self.is_close(source, &shown).then_some((residual, shown))
+        self.is_close(&source, &shown).then_some((residual, shown))
     }
 
     fn is_close(&self, a: &Samples, b: &Samples) -> bool {
@@ -1051,6 +1042,34 @@ fn write_exp_golomb(cabac: &mut CabacWriter, mut value: u32) {
     }
     cabac.bypass_bits(0, 1);
     cabac.bypass_bits(value, k);
+}
+
+/// The transformed residual of each plane that needs one: luma, and Cb
+/// and Cr together.
+struct Coefficients {
+    luma: Option<Vec<i64>>,
+    chroma: [Option<Vec<i64>>; 2],
+}
+
+impl Coefficients {
+    /// Transform what `prediction` misses of `source` in the planes
+    /// `needs` names (luma, chroma).
+    fn of(source: &Samples, prediction: &Samples, [luma, chroma]: [bool; 2]) -> Self {
+        let transformed = |source: &[u8], prediction: &[u8]| {
+            let residual: Vec<i32> = source
+                .iter()
+                .zip(prediction)
+                .map(|(s, p)| i32::from(*s) - i32::from(*p))
+                .collect();
+            hevc_residual::transform(&residual, source.len().isqrt())
+        };
+        Self {
+            luma: luma.then(|| transformed(&source.luma, &prediction.luma)),
+            chroma: [0, 1].map(|plane| {
+                chroma.then(|| transformed(&source.chroma[plane], &prediction.chroma[plane]))
+            }),
+        }
+    }
 }
 
 /// A colour plane, and where a block's samples sit in it.
