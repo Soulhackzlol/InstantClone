@@ -4089,6 +4089,7 @@ Name@x"
             },
             delay_transition: crate::delay_transition::DelayTransition {
                 enabled: true,
+                theme: crate::crash_protection::SlateTheme::Halftone,
                 headline: "Hold tight".into(),
                 subline: "Delay incoming".into(),
             },

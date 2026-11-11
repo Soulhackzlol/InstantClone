@@ -102,6 +102,8 @@ function cpRender(){
   $('s-cp-bg-note').hidden = !!cpState.background;
   $('s-cp-bg-reset').hidden = !cpState.background;
   cpScheduleRefresh();
+  // The transition screen shares these colours.
+  dtSchedulePreview();
 }
 // Character counters, and "Reset text" once either line is edited.
 function cpRenderText(){
@@ -218,31 +220,85 @@ function cpApplyConfig(cp){
 cpInit();
 
 // ── Delay transition (System > General) ──────────────────────────────────
-// A screen instead of a jump back when a delay turns on. Its look is the
-// crash screen's; only its words are its own.
+// A screen instead of a jump back when a delay turns on. Its style and
+// words are its own; its colours are the crash screen's.
 let dtDefaults = {headline:'', subline:''};
+let dtPreviewTimer = null;
+let dtGeneration = 0;
+let dtVideoUrl = '';
 function dtFields(){
   return {
     'delay_transition.enabled': $('s-dt-enabled').checked ? 'true' : 'false',
+    'delay_transition.theme': $('s-dt-theme').value,
     'delay_transition.headline': $('s-dt-headline').value,
     'delay_transition.subline': $('s-dt-subline').value,
   };
 }
+// The same styles the crash card offers, from GET /config.
+function dtBuildThemes(picked){
+  const select = $('s-dt-theme');
+  select.replaceChildren(...cpThemes.map(theme => new Option(theme.name, theme.id)));
+  select.value = picked;
+}
 function dtRender(){
-  $('s-dt-text').hidden = !$('s-dt-enabled').checked;
+  $('s-dt-details').hidden = !$('s-dt-enabled').checked;
   $('s-dt-text-reset').hidden = $('s-dt-headline').value === dtDefaults.headline
     && $('s-dt-subline').value === dtDefaults.subline;
+  dtSchedulePreview();
   updateSaveBar();
+}
+function dtSchedulePreview(){
+  clearTimeout(dtPreviewTimer);
+  dtPreviewTimer = setTimeout(dtRefreshPreview, 250);
+}
+// The transition screen as viewers will see it: a still for the flat
+// styles, the encoded loop for the soft ones. Unsaved edits ride along.
+function dtRefreshPreview(){
+  const video = $('s-dt-preview-video');
+  if ($('s-dt-details').hidden) { video.pause(); return; }
+  const generation = ++dtGeneration;
+  const id = $('s-dt-theme').value;
+  const theme = cpThemes.find(t => t.id === id);
+  const params = new URLSearchParams({
+    'crash_protection.theme': id,
+    'crash_protection.accent': cpState.accent,
+    'crash_protection.background': cpState.background,
+    'crash_protection.headline': $('s-dt-headline').value,
+    'crash_protection.subline': $('s-dt-subline').value,
+    size: 'thumb',
+  });
+  const show = isVideo => { video.hidden = !isVideo; $('s-dt-preview').hidden = isVideo; };
+  if (!theme || !theme.soft) {
+    params.set('phase', '0.3');
+    $('s-dt-preview').src = '/crash-protection/preview?' + params;
+    video.pause();
+    show(false);
+    return;
+  }
+  params.set('format', 'mp4');
+  fetch('/crash-protection/preview?' + params)
+    .then(response => response.ok ? response.blob() : Promise.reject(response.status))
+    .then(blob => {
+      if (generation !== dtGeneration) return;
+      URL.revokeObjectURL(dtVideoUrl);
+      dtVideoUrl = URL.createObjectURL(blob);
+      video.src = dtVideoUrl;
+      show(true);
+      if (!cpStill) video.play().catch(() => {});
+    })
+    .catch(() => {});
 }
 function dtApplyConfig(dt){
   if (!dt) return;
   dtDefaults = dt.defaults || dtDefaults;
   $('s-dt-enabled').checked = !!dt.enabled;
+  dtBuildThemes(dt.theme || 'halo');
   $('s-dt-headline').value = dt.headline || '';
   $('s-dt-subline').value = dt.subline || '';
   dtRender();
 }
 $('s-dt-enabled').onchange = dtRender;
+$('s-dt-theme').onchange = dtRender;
 $('s-dt-headline').oninput = dtRender;
 $('s-dt-subline').oninput = dtRender;
 $('s-dt-text-reset').onclick = () => {
@@ -250,8 +306,8 @@ $('s-dt-text-reset').onclick = () => {
   $('s-dt-subline').value = dtDefaults.subline;
   dtRender();
 };
-// The style lives on the Crash protection card: take the streamer there.
-$('s-dt-style').onclick = e => {
+// The colours live on the Crash protection card: take the streamer there.
+$('s-dt-colours').onclick = e => {
   e.preventDefault();
   const tab = document.querySelector('#sys-sub-tabs [data-subtab="crash"]');
   if (tab) tab.click();

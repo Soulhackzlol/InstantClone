@@ -713,7 +713,7 @@
 "No need to press Activate: every arm goes on air once it's ready.": "No hace falta pulsar Activar: cada armado sale en emisión en cuanto está listo.",
 "Show a screen while the delay builds": "Mostrar una pantalla mientras se forma el delay",
 "When a delay turns on or goes up, viewers see a screen instead of the last seconds again, then the stream carries on from where they were. Qualities in AV1 or 10-bit HEVC jump back as before.": "Cuando el delay se activa o sube, tus espectadores ven una pantalla en lugar de volver a ver los últimos segundos, y luego el directo sigue justo donde lo dejaron. Las calidades en AV1 o HEVC de 10 bits retroceden como siempre.",
-"Change its style in Crash protection": "Cambia su estilo en Protección contra crasheos",
+"Colours follow Crash protection": "Los colores son los de Protección contra crasheos",
 "Screen text": "Texto de la pantalla",
 "Press keys…": "Pulsa las teclas…",
 "Default delay": "Delay por defecto",

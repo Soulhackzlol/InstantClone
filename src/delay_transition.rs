@@ -4,24 +4,26 @@
 //! delay, so they see the last seconds again. With the transition on, each
 //! destination plays a screen instead, until the delay has built up behind
 //! it, then picks up exactly where viewers left off: nothing replayed,
-//! nothing missed. The screen has the crash-protection screen's look (theme
-//! and colours) with its own words. Destinations whose video the screens
+//! nothing missed. The screen has its own style and words, in the
+//! crash-protection screen's colours. Destinations whose video the screens
 //! can't stand in for (AV1, 10-bit HEVC) jump as before.
 //!
 //! This file owns the `delay_transition.*` config keys; the screen is
 //! played by `crate::crash_hold::play_transition`.
 
-use crate::crash_protection::{self, CrashProtection};
+use crate::crash_protection::{self, CrashProtection, SlateTheme};
 use std::io::{self, Write};
 
 /// Config and form keys share this prefix, like `crash_protection.`.
 pub const KEY_PREFIX: &str = "delay_transition.";
 const HEADLINE_DEFAULT: &str = "Back in a moment";
 const SUBLINE_DEFAULT: &str = "The stream picks up right where it left off";
+const THEME_DEFAULT: SlateTheme = SlateTheme::Halo;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DelayTransition {
     pub enabled: bool,
+    pub theme: SlateTheme,
     pub headline: String,
     pub subline: String,
 }
@@ -30,6 +32,7 @@ impl Default for DelayTransition {
     fn default() -> Self {
         Self {
             enabled: false,
+            theme: THEME_DEFAULT,
             headline: HEADLINE_DEFAULT.into(),
             subline: SUBLINE_DEFAULT.into(),
         }
@@ -42,6 +45,11 @@ impl DelayTransition {
     pub fn set(&mut self, field: &str, value: &str) {
         match field {
             "enabled" => self.enabled = crash_protection::is_truthy(value),
+            "theme" => {
+                if let Some(theme) = SlateTheme::from_id(value) {
+                    self.theme = theme;
+                }
+            }
             "headline" => {
                 self.headline =
                     crash_protection::sanitize_text(value, crash_protection::HEADLINE_MAX_CHARS)
@@ -54,10 +62,12 @@ impl DelayTransition {
         }
     }
 
-    /// The screen a transition plays: the reconnect screen's look, with
-    /// the transition's own words.
+    /// The screen a transition plays: its own style and words in the
+    /// reconnect screen's colours (a background the streamer left on the
+    /// default follows the transition's style).
     pub fn screen(&self, look: &CrashProtection) -> CrashProtection {
         CrashProtection {
+            theme: self.theme,
             headline: self.headline.clone(),
             subline: self.subline.clone(),
             ..look.clone()
@@ -80,8 +90,9 @@ impl DelayTransition {
     pub fn to_json(&self) -> String {
         let defaults = Self::default();
         format!(
-            r#"{{"enabled":{},"headline":{},"subline":{},"defaults":{{"headline":{},"subline":{}}}}}"#,
+            r#"{{"enabled":{},"theme":{},"headline":{},"subline":{},"defaults":{{"headline":{},"subline":{}}}}}"#,
             self.enabled,
+            crate::config::json_str(self.theme.id()),
             crate::config::json_str(&self.headline),
             crate::config::json_str(&self.subline),
             crate::config::json_str(&defaults.headline),
@@ -89,9 +100,10 @@ impl DelayTransition {
         )
     }
 
-    fn entries(&self) -> [(&'static str, String); 3] {
+    fn entries(&self) -> [(&'static str, String); 4] {
         [
             ("enabled", self.enabled.to_string()),
+            ("theme", self.theme.id().to_string()),
             ("headline", self.headline.clone()),
             ("subline", self.subline.clone()),
         ]
@@ -111,13 +123,15 @@ mod tests {
         assert!(lines.is_empty(), "defaults write nothing");
 
         settings.set("enabled", "on");
+        settings.set("theme", "halftone");
+        settings.set("theme", "no-such-style");
         settings.set("headline", "  Be right back\n");
         let mut lines = Vec::new();
         settings.write_lines(&mut lines).unwrap();
         let text = String::from_utf8(lines).unwrap();
         assert_eq!(
             text,
-            "delay_transition.enabled=true\ndelay_transition.headline=Be right back\n"
+            "delay_transition.enabled=true\ndelay_transition.theme=halftone\ndelay_transition.headline=Be right back\n"
         );
         let mut loaded = DelayTransition::default();
         for line in text.lines() {
@@ -128,15 +142,24 @@ mod tests {
     }
 
     #[test]
-    fn the_screen_keeps_the_look_and_takes_its_own_words() {
+    fn the_screen_has_its_own_style_and_words_in_the_crash_colours() {
         let look = CrashProtection {
-            theme: SlateTheme::Halo,
+            theme: SlateTheme::Arcade,
+            accent: crate::slate::Rgb::new(0xff, 0x6b, 0x6b),
             ..CrashProtection::default()
         };
-        let transition = DelayTransition::default();
+        let transition = DelayTransition {
+            theme: SlateTheme::Embers,
+            ..DelayTransition::default()
+        };
         let screen = transition.screen(&look);
-        assert_eq!(screen.theme, SlateTheme::Halo);
+        assert_eq!(screen.theme, SlateTheme::Embers);
         assert_eq!(screen.accent, look.accent);
+        assert_eq!(
+            screen.resolved_background(),
+            SlateTheme::Embers.default_background(),
+            "a default background follows the transition's style"
+        );
         assert_eq!(screen.headline, HEADLINE_DEFAULT);
         assert_eq!(screen.subline, SUBLINE_DEFAULT);
     }
