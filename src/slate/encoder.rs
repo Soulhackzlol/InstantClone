@@ -398,8 +398,9 @@ impl<'a> PictureCoder<'a> {
             return;
         }
         let sources = (&luma_source, &chroma_source);
-        for step in self.ladder_step.saturating_sub(1)..QP_LADDER.len() {
-            let Some(attempt) = self.attempt(QP_LADDER[step], sources, &luma, &chroma) else {
+        let ladder = QP_LADDER.iter().enumerate();
+        for (step, qp) in ladder.skip(self.ladder_step.saturating_sub(1)) {
+            let Some(attempt) = self.attempt(*qp, sources, &luma, &chroma) else {
                 continue;
             };
             let mut scratch = BitWriter::new();
@@ -462,8 +463,8 @@ impl<'a> PictureCoder<'a> {
         }
         if chroma.needs_residual {
             let chroma_qp = residual::chroma_qp(qp);
-            for plane in 0..2 {
-                let residual = difference(&chroma_source[plane], &chroma.prediction[plane]);
+            for (plane, source) in chroma_source.iter().enumerate() {
+                let residual = difference(source, &chroma.prediction[plane]);
                 let levels = residual::quantize_chroma(&residual, chroma_qp);
                 let rebuilt = residual::rebuild_chroma(&levels, chroma_qp);
                 attempt.shown_chroma[plane] = add_clipped(&chroma.prediction[plane], &rebuilt);

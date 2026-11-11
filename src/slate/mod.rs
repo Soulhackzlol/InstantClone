@@ -12,6 +12,7 @@ mod cavlc_tables;
 mod encoder;
 mod font;
 mod hevc;
+mod hevc_residual;
 mod pixel_font;
 mod png;
 mod raster;
@@ -800,34 +801,55 @@ mod tests {
     /// Soft pictures are coded with residual, so the encoder has to rebuild
     /// each block exactly as a decoder will: every later prediction and
     /// skip leans on it. Decode with ffmpeg and require its pixels to be
-    /// the encoder's own, and those to stay within the tolerance.
+    /// the encoder's own, and those to stay within the tolerance, in both
+    /// codecs.
     #[test]
-    fn ffmpeg_shows_exactly_what_the_h264_encoder_thinks_it_shows() {
+    fn ffmpeg_shows_exactly_what_the_encoder_thinks_it_shows() {
         if !ffmpeg_is_available("the soft screen decode round trip") {
             return;
         }
-        for (width, height, tolerance) in [(64, 64, 2), (320, 192, 1), (320, 192, 3)] {
+        let sizes = [(64, 64, 2), (320, 192, 1), (320, 192, 3)];
+        for (codec, (width, height, tolerance)) in CODECS
+            .into_iter()
+            .flat_map(|codec| sizes.map(|size| (codec, size)))
+        {
             let shape = StreamShape {
                 width,
                 height,
                 fps: 10,
             };
-            let sets = encoder::parameter_sets(shape);
+            let what = format!("{codec:?} {width}x{height} within {tolerance}");
             let first = soft_test_frame(width, height, 0);
-            let idr = encoder::encode_idr_within(&first, 0, tolerance);
-            let what = format!("{width}x{height} within {tolerance}");
+            let (keyframe, mut shown) = match codec {
+                SlateCodec::H264 => {
+                    let sets = encoder::parameter_sets(shape);
+                    let idr = encoder::encode_idr_within(&first, 0, tolerance);
+                    let sample = bitstream::length_prefixed(&[&sets.sps, &sets.pps, &idr.nal]);
+                    (sample, idr.shown)
+                }
+                SlateCodec::Hevc => {
+                    let [vps, sps, pps] = hevc::parameter_sets(shape);
+                    let idr = hevc::encode_idr_within(&first, tolerance);
+                    let sample = bitstream::length_prefixed(&[&vps, &sps, &pps, &idr.nal]);
+                    (sample, idr.shown)
+                }
+            };
             assert!(
-                worst_difference(&first, &idr.shown) <= tolerance,
+                worst_difference(&first, &shown) <= tolerance,
                 "{what}: keyframe"
             );
-            let mut samples = vec![bitstream::length_prefixed(&[
-                &sets.sps, &sets.pps, &idr.nal,
-            ])];
-            let mut expected = frame_bytes(&idr.shown);
-            let mut shown = idr.shown;
+            let mut samples = vec![keyframe];
+            let mut expected = frame_bytes(&shown);
             for time in 1..8 {
                 let frame = soft_test_frame(width, height, time);
-                let coded = encoder::encode_p_within(&frame, &shown, time as u32, tolerance);
+                let coded = match codec {
+                    SlateCodec::H264 => {
+                        encoder::encode_p_within(&frame, &shown, time as u32, tolerance)
+                    }
+                    SlateCodec::Hevc => {
+                        hevc::encode_p_within(&frame, &shown, time as u32, tolerance)
+                    }
+                };
                 assert!(
                     worst_difference(&frame, &coded.shown) <= tolerance,
                     "{what}: picture {time}"
@@ -837,8 +859,7 @@ mod tests {
                 shown = coded.shown;
             }
             let stream = annex_b_samples(samples.iter());
-            let decoded =
-                decode_with_ffmpeg(&stream, shape.fps, SlateCodec::H264, SlateTheme::Whisper);
+            let decoded = decode_with_ffmpeg(&stream, shape.fps, codec, SlateTheme::Whisper);
             assert_eq!(decoded.len(), expected.len(), "{what}: frame count");
             let first_wrong = decoded.iter().zip(&expected).position(|(a, b)| a != b);
             assert_eq!(first_wrong, None, "{what}: first differing sample");
@@ -874,38 +895,44 @@ mod tests {
                 colour
             });
         };
-        for travel in [0.05, 0.15] {
-            for tolerance in [1, 2, 3] {
-                let started = std::time::Instant::now();
-                let frame_count = fps * seconds;
-                let mut bytes = 0;
-                let mut keyframe = 0;
-                let mut shown: Option<raster::YuvFrame> = None;
-                for index in 0..frame_count {
-                    let mut canvas = Canvas::new(width, height, Rgb::new(11, 13, 18));
-                    // One trip round in 16 s.
-                    aurora(&mut canvas, index as f32 / (16 * fps) as f32, travel);
-                    let frame = canvas.to_yuv420_padded(16);
-                    let coded = match (&shown, index % (2 * fps)) {
-                        (Some(before), at) if at != 0 => {
-                            encoder::encode_p_within(&frame, before, at as u32, tolerance)
-                        }
-                        _ => {
-                            let idr = encoder::encode_idr_within(&frame, 0, tolerance);
-                            keyframe = idr.nal.len();
-                            idr
-                        }
-                    };
-                    bytes += coded.nal.len();
-                    shown = Some(coded.shown);
+        let runs = CODECS
+            .into_iter()
+            .flat_map(|codec| [0.05, 0.15].map(|travel| (codec, travel)))
+            .flat_map(|(codec, travel)| [1, 2, 3].map(|tolerance| (codec, travel, tolerance)));
+        for (codec, travel, tolerance) in runs {
+            let started = std::time::Instant::now();
+            let frame_count = fps * seconds;
+            let mut bytes = 0;
+            let mut keyframe = 0;
+            let mut shown: Option<raster::YuvFrame> = None;
+            for index in 0..frame_count {
+                let mut canvas = Canvas::new(width, height, Rgb::new(11, 13, 18));
+                // One trip round in 16 s.
+                aurora(&mut canvas, index as f32 / (16 * fps) as f32, travel);
+                let frame = canvas.to_yuv420_padded(codec.block_size());
+                let at = index % (2 * fps);
+                let coded = match (&shown, codec) {
+                    (Some(before), SlateCodec::H264) if at != 0 => {
+                        encoder::encode_p_within(&frame, before, at as u32, tolerance)
+                    }
+                    (Some(before), SlateCodec::Hevc) if at != 0 => {
+                        hevc::encode_p_within(&frame, before, at as u32, tolerance)
+                    }
+                    (_, SlateCodec::H264) => encoder::encode_idr_within(&frame, 0, tolerance),
+                    (_, SlateCodec::Hevc) => hevc::encode_idr_within(&frame, tolerance),
+                };
+                if at == 0 {
+                    keyframe = coded.nal.len();
                 }
-                log_line!(
-                    "travel {travel} tolerance {tolerance}: {} kbps, keyframe {} KB, built in {:?}",
-                    bytes * 8 / (seconds * 1000),
-                    keyframe / 1000,
-                    started.elapsed()
-                );
+                bytes += coded.nal.len();
+                shown = Some(coded.shown);
             }
+            log_line!(
+                "{codec:?} travel {travel} tolerance {tolerance}: {} kbps, keyframe {} KB, built in {:?}",
+                bytes * 8 / (seconds * 1000),
+                keyframe / 1000,
+                started.elapsed()
+            );
         }
     }
 

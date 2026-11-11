@@ -218,6 +218,15 @@ fn rescale_ac(level: i32, qp: i32, index: usize) -> i32 {
     }
 }
 
+/// A 4x4 block ready for the inverse transform: its already-rescaled DC
+/// term, then its AC levels rescaled.
+fn scaled_block(dc: i32, ac: &Block4, qp: i32) -> Block4 {
+    std::array::from_fn(|index| match index {
+        0 => dc,
+        _ => rescale_ac(ac[index], qp, index),
+    })
+}
+
 /// The quantised coefficients of one 16x16 luma block coded as Intra16x16.
 pub struct LumaLevels {
     /// The 4x4 blocks' DC terms after their Hadamard transform, laid out
@@ -271,14 +280,9 @@ pub fn rebuild_luma(levels: &LumaLevels, qp: i32) -> [i32; 256] {
         }
     });
     let mut residual = [0; 256];
-    for block in 0..16 {
+    for (block, dc_term) in dc.iter().enumerate() {
         let (block_row, block_column) = (block / 4, block % 4);
-        let mut scaled = [0; 16];
-        scaled[0] = dc[block];
-        for index in 1..16 {
-            scaled[index] = rescale_ac(levels.ac[block][index], qp, index);
-        }
-        let samples = inverse_core(&scaled);
+        let samples = inverse_core(&scaled_block(*dc_term, &levels.ac[block], qp));
         for row in 0..4 {
             let start = (4 * block_row + row) * 16 + 4 * block_column;
             residual[start..start + 4].copy_from_slice(&samples[4 * row..4 * row + 4]);
@@ -336,14 +340,9 @@ pub fn rebuild_chroma(levels: &ChromaLevels, qp: i32) -> [i32; 64] {
     let scale = level_scale(qp, 0);
     let dc = hadamard2(levels.dc).map(|term| ((term * scale) << (qp / 6)) >> 5);
     let mut residual = [0; 64];
-    for block in 0..4 {
+    for (block, dc_term) in dc.iter().enumerate() {
         let (block_row, block_column) = (block / 2, block % 2);
-        let mut scaled = [0; 16];
-        scaled[0] = dc[block];
-        for index in 1..16 {
-            scaled[index] = rescale_ac(levels.ac[block][index], qp, index);
-        }
-        let samples = inverse_core(&scaled);
+        let samples = inverse_core(&scaled_block(*dc_term, &levels.ac[block], qp));
         for row in 0..4 {
             let start = (4 * block_row + row) * 8 + 4 * block_column;
             residual[start..start + 4].copy_from_slice(&samples[4 * row..4 * row + 4]);
