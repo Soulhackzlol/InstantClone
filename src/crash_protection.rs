@@ -42,14 +42,23 @@ pub enum SlateTheme {
     Halo,
     /// Slow diagonal swells of light rolling across, calm round the text.
     Tide,
+    /// Smoke printed as halftone dots, curling slowly.
+    Halftone,
+    /// A fine grid of still dots lit by two wandering lights.
+    Lattice,
+    /// Sparks drifting up from a low glow.
+    Embers,
 }
 
 impl SlateTheme {
     /// Every theme, in the order the dashboard offers them.
-    pub const ALL: [SlateTheme; 8] = [
+    pub const ALL: [SlateTheme; 11] = [
         SlateTheme::Aurora,
         SlateTheme::Halo,
         SlateTheme::Tide,
+        SlateTheme::Halftone,
+        SlateTheme::Lattice,
+        SlateTheme::Embers,
         SlateTheme::Whisper,
         SlateTheme::Beacon,
         SlateTheme::Orbit,
@@ -67,6 +76,9 @@ impl SlateTheme {
             SlateTheme::Aurora => "aurora",
             SlateTheme::Halo => "halo",
             SlateTheme::Tide => "tide",
+            SlateTheme::Halftone => "halftone",
+            SlateTheme::Lattice => "lattice",
+            SlateTheme::Embers => "embers",
         }
     }
 
@@ -81,10 +93,13 @@ impl SlateTheme {
             SlateTheme::Aurora => "Aurora",
             SlateTheme::Halo => "Halo",
             SlateTheme::Tide => "Tide",
+            SlateTheme::Halftone => "Halftone",
+            SlateTheme::Lattice => "Lattice",
+            SlateTheme::Embers => "Embers",
         }
     }
 
-    fn from_id(id: &str) -> Option<Self> {
+    pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|theme| theme.id() == id)
     }
 
@@ -99,24 +114,33 @@ impl SlateTheme {
             SlateTheme::Aurora => Rgb::new(0x0a, 0x0c, 0x12),
             SlateTheme::Halo => Rgb::new(0x0b, 0x0b, 0x10),
             SlateTheme::Tide => Rgb::new(0x09, 0x0e, 0x14),
+            SlateTheme::Halftone => Rgb::new(0x07, 0x07, 0x09),
+            SlateTheme::Lattice => Rgb::new(0x0a, 0x0b, 0x10),
+            SlateTheme::Embers => Rgb::new(0x0c, 0x0a, 0x0e),
         }
     }
 
-    /// Whether the theme paints soft light (gradients, glows). Those are
-    /// encoded within `SOFT_TOLERANCE` of the render, the rest exactly.
+    /// Whether the theme paints soft light, fine detail or both (glows,
+    /// dots, sparks) moving all through the loop. Those are encoded within
+    /// `SOFT_TOLERANCE` of the render, the flat ones exactly.
     pub fn is_soft(self) -> bool {
-        matches!(
+        !matches!(
             self,
-            SlateTheme::Aurora | SlateTheme::Halo | SlateTheme::Tide
+            SlateTheme::Whisper
+                | SlateTheme::Arcade
+                | SlateTheme::Beacon
+                | SlateTheme::Orbit
+                | SlateTheme::Studio
         )
     }
 
     /// How far a decoded sample may sit from the render (of 255).
     pub fn tolerance(self) -> u8 {
-        if self.is_soft() {
-            SOFT_TOLERANCE
-        } else {
-            0
+        match self {
+            SlateTheme::Halftone => HALFTONE_TOLERANCE,
+            SlateTheme::Lattice => LATTICE_TOLERANCE,
+            _ if self.is_soft() => SOFT_TOLERANCE,
+            _ => 0,
         }
     }
 
@@ -138,9 +162,14 @@ impl SlateTheme {
 }
 
 /// Two levels of 255: below what a viewer can see on a gradient, and what
-/// keeps a soft 1080p screen near 100 to 300 kbps in HEVC and 250 to 700
-/// in H.264 (measured, `slate::tests::measure_soft_loop`).
+/// keeps a soft-light 1080p screen near 300 to 450 kbps in HEVC and 850 to
+/// 1350 in H.264 (measured, `slate::tests::measure_soft_loops`).
 const SOFT_TOLERANCE: u8 = 2;
+/// Hard-edged dots hide far bigger errors than soft light does (flat
+/// background between them stays within a level, see `slate::fidelity`),
+/// and coding their edges closely costs several times the bits.
+const HALFTONE_TOLERANCE: u8 = 8;
+const LATTICE_TOLERANCE: u8 = 6;
 /// Four 2 s intervals: an 8 s loop.
 const SOFT_LOOP_INTERVALS: usize = 4;
 

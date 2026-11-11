@@ -171,6 +171,22 @@ impl Canvas {
         };
     }
 
+    /// Add `light` (red, green and blue on the 0..255 scale) to one pixel,
+    /// as light adds up: glows that overlap get brighter.
+    pub fn add_light(&mut self, x: usize, y: usize, light: [f32; 3]) {
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        let pixel = &mut self.pixels[y * self.width + x];
+        let lit =
+            |channel: u8, added: f32| (f32::from(channel) + added).round().clamp(0.0, 255.0) as u8;
+        *pixel = Rgb::new(
+            lit(pixel.r, light[0]),
+            lit(pixel.g, light[1]),
+            lit(pixel.b, light[2]),
+        );
+    }
+
     /// Convert to 4:2:0 planes padded to whole H.264 macroblocks.
     #[cfg(test)]
     pub fn to_yuv420(&self) -> YuvFrame {

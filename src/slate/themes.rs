@@ -11,7 +11,7 @@
 use super::font::{self, Align, Weight};
 use super::pixel_font::{self, ADVANCE_COLUMNS, GLYPH_COLUMNS, GLYPH_ROWS};
 use super::raster::{Canvas, Rgb};
-use super::soft_themes;
+use super::{detail_themes, soft_themes};
 use crate::crash_protection::SlateTheme;
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -34,6 +34,9 @@ pub fn draw(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
         SlateTheme::Aurora => soft_themes::draw_aurora(canvas, style, phase),
         SlateTheme::Halo => soft_themes::draw_halo(canvas, style, phase),
         SlateTheme::Tide => soft_themes::draw_tide(canvas, style, phase),
+        SlateTheme::Halftone => detail_themes::draw_halftone(canvas, style, phase),
+        SlateTheme::Lattice => detail_themes::draw_lattice(canvas, style, phase),
+        SlateTheme::Embers => detail_themes::draw_embers(canvas, style, phase),
     }
 }
 
@@ -53,12 +56,12 @@ pub(super) fn canvas_center(canvas: &Canvas) -> (f32, f32) {
 /// A phase that lands on a step (0.3333 for 2 of 6) can come out a hair
 /// under it in floating point; the margin keeps it on that step, so the
 /// stream and the preview, which reach a moment by different sums, agree.
-fn stepped(phase: f32, steps: f32) -> f32 {
+pub(super) fn stepped(phase: f32, steps: f32) -> f32 {
     const ON_THE_STEP: f32 = 1e-4;
     (phase * steps + ON_THE_STEP).floor() / steps
 }
 
-const HEADLINE_COLOR: Rgb = Rgb::new(0xee, 0xf0, 0xf3);
+pub(super) const HEADLINE_COLOR: Rgb = Rgb::new(0xee, 0xf0, 0xf3);
 const SUBLINE_COLOR: Rgb = Rgb::new(0x7d, 0x85, 0x91);
 pub(super) const HEADLINE_PX: f32 = 46.0;
 pub(super) const SUBLINE_PX: f32 = 25.0;

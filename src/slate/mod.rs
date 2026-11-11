@@ -12,6 +12,7 @@
 mod bitstream;
 mod cabac;
 mod cavlc_tables;
+mod detail_themes;
 mod encoder;
 mod fidelity;
 mod font;
@@ -437,10 +438,11 @@ mod tests {
     }
 
     /// Every theme's loop at `width` x `height`, in both codecs, built at
-    /// the rate a hold really uses, stays under `max_kbps`, and a soft
-    /// theme under twice that: light that moves everywhere costs more than
-    /// a few moving shapes, and the screen replaces a stream that carries
-    /// several times as much.
+    /// the rate a hold really uses, stays under `max_kbps`, a soft theme
+    /// under twice that and one of fine moving detail under four times:
+    /// light that moves everywhere costs more than a few moving shapes, and
+    /// dots and sparks more than light. Even four times stays well under
+    /// the stream the screen stands in for, whose upload it uses.
     fn assert_every_theme_fits(width: usize, height: usize, max_kbps: usize) {
         let shape = StreamShape {
             width,
@@ -460,10 +462,10 @@ mod tests {
             let loop_ms = slate.intervals.len() * KEYFRAME_INTERVAL_MS;
             // Bits per millisecond are kbps.
             let kbps = loop_bytes * 8 / loop_ms;
-            let budget = if theme.is_soft() {
-                2 * max_kbps
-            } else {
-                max_kbps
+            let budget = match theme {
+                SlateTheme::Halftone | SlateTheme::Lattice | SlateTheme::Embers => 4 * max_kbps,
+                _ if theme.is_soft() => 2 * max_kbps,
+                _ => max_kbps,
             };
             assert!(
                 kbps < budget,
@@ -971,73 +973,53 @@ mod tests {
         }
     }
 
-    /// Not a check: prints what a drifting aurora costs at 1080p, by
-    /// tolerance and by how fast it moves. Run with
-    /// `cargo test --release measure_soft_loop -- --ignored --nocapture`.
+    /// Not a check: builds every soft theme's loop at 1080p (or only the
+    /// one named by `THEME`, at the size `SIZE` names, like `2560x1440`)
+    /// and prints what it costs and how long it took, and saves a still
+    /// and the H.264 loop of each at full size in the temp dir, to look at.
+    /// Run with
+    /// `cargo test --release measure_soft_loops -- --ignored --nocapture`.
     #[test]
     #[ignore]
-    fn measure_soft_loop() {
-        let (width, height, fps) = (1920, 1080, 30);
-        let seconds = 4;
-        let aurora = |canvas: &mut Canvas, phase: f32, travel: f32| {
-            let blobs: [([f32; 3], f32, f32); 3] = [
-                ([90.0, 200.0, 250.0], 0.0, 0.25),
-                ([150.0, 90.0, 240.0], 0.33, 0.6),
-                ([40.0, 220.0, 170.0], 0.66, 0.9),
-            ];
-            canvas.paint_smooth(8, |x, y| {
-                let mut colour = [11.0, 13.0, 18.0];
-                for (tint, offset, across) in blobs {
-                    let angle = std::f32::consts::TAU * (phase + offset);
-                    let cx = across + travel * angle.cos();
-                    let cy = 0.5 + travel * angle.sin();
-                    let (dx, dy) = ((x - cx) * 16.0 / 9.0, y - cy);
-                    let glow = 0.42 * (-(dx * dx + dy * dy) / 0.12).exp();
-                    for channel in 0..3 {
-                        colour[channel] += tint[channel] * glow;
-                    }
-                }
-                colour
-            });
+    fn measure_soft_loops() {
+        let size = std::env::var("SIZE").unwrap_or_default();
+        let (width, height) = size
+            .split_once('x')
+            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+            .unwrap_or((1920, 1080));
+        let shape = StreamShape {
+            width,
+            height,
+            fps: crate::crash_hold::SLATE_FPS,
         };
-        let runs = CODECS
+        let only = std::env::var("THEME").ok();
+        let themes = SlateTheme::ALL
             .into_iter()
-            .flat_map(|codec| [0.05, 0.15].map(|travel| (codec, travel)))
-            .flat_map(|(codec, travel)| [1, 2, 3].map(|tolerance| (codec, travel, tolerance)));
-        for (codec, travel, tolerance) in runs {
-            let started = std::time::Instant::now();
-            let frame_count = fps * seconds;
-            let mut bytes = 0;
-            let mut keyframe = 0;
-            let mut shown: Option<raster::YuvFrame> = None;
-            for index in 0..frame_count {
-                let mut canvas = Canvas::new(width, height, Rgb::new(11, 13, 18));
-                // One trip round in 16 s.
-                aurora(&mut canvas, index as f32 / (16 * fps) as f32, travel);
-                let frame = canvas.to_yuv420_padded(codec.block_size());
-                let at = index % (2 * fps);
-                let coded = match (&shown, codec) {
-                    (Some(before), SlateCodec::H264) if at != 0 => {
-                        encoder::encode_p_within(&frame, before, at as u32, tolerance)
-                    }
-                    (Some(before), SlateCodec::Hevc) if at != 0 => {
-                        hevc::encode_p_within(&frame, before, at as u32, tolerance)
-                    }
-                    (_, SlateCodec::H264) => encoder::encode_idr_within(&frame, 0, tolerance),
-                    (_, SlateCodec::Hevc) => hevc::encode_idr_within(&frame, tolerance),
-                };
-                if at == 0 {
-                    keyframe = coded.nal.len();
-                }
-                bytes += coded.nal.len();
-                shown = Some(coded.shown);
+            .filter(|theme| theme.is_soft())
+            .filter(|theme| only.as_deref().is_none_or(|id| id == theme.id()));
+        for theme in themes {
+            let still = preview_png(&settings(theme), shape.width, shape.height, &[0.3]);
+            let path = std::env::temp_dir().join(format!("instantclone-{}.png", theme.id()));
+            std::fs::write(&path, still).unwrap();
+            let video = preview_mp4(&settings(theme), shape.width, shape.height).unwrap();
+            std::fs::write(path.with_extension("mp4"), video).unwrap();
+            for codec in CODECS {
+                let started = std::time::Instant::now();
+                let slate = build_loop(&settings(theme), shape, codec).unwrap();
+                let bytes: usize = slate
+                    .intervals
+                    .iter()
+                    .map(|i| i.keyframes[0].len() + i.deltas.iter().map(Vec::len).sum::<usize>())
+                    .sum();
+                let keyframe = slate.intervals[0].keyframes[0].len();
+                log_line!(
+                    "{theme:?} {codec:?}: {} kbps, keyframe {} KB, built in {:?}",
+                    bytes * 8 / (slate.intervals.len() * KEYFRAME_INTERVAL_MS),
+                    keyframe / 1000,
+                    started.elapsed()
+                );
             }
-            log_line!(
-                "{codec:?} travel {travel} tolerance {tolerance}: {} kbps, keyframe {} KB, built in {:?}",
-                bytes * 8 / (seconds * 1000),
-                keyframe / 1000,
-                started.elapsed()
-            );
+            log_line!("{theme:?} still: {}", path.display());
         }
     }
 

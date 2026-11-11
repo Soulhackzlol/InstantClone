@@ -29,7 +29,7 @@ const POOL_FALLOFF_AT_1080: f32 = 260.0;
 /// text's rectangle (so the whole rectangle is inside it), and how softly
 /// light rises past its edge. An oval reads as a vignette; a rectangle
 /// read as a box.
-struct Pool {
+pub(super) struct Pool {
     left: f32,
     top: f32,
     right: f32,
@@ -39,7 +39,7 @@ struct Pool {
 
 impl Pool {
     /// The pool round centred text whose headline sits on `baseline_y`.
-    fn around_text(canvas: &Canvas, style: &ScreenStyle, baseline_y: f32) -> Self {
+    pub(super) fn around_text(canvas: &Canvas, style: &ScreenStyle, baseline_y: f32) -> Self {
         let scale = design_scale(canvas);
         let line = |size_px: f32, weight| font::Line {
             size_px: size_px * scale,
@@ -62,7 +62,7 @@ impl Pool {
 
     /// How much of the light reaches the pixel at (`x`, `y`): none in the
     /// pool, all of it a falloff past its edge, eased between.
-    fn reach(&self, x: f32, y: f32) -> f32 {
+    pub(super) fn reach(&self, x: f32, y: f32) -> f32 {
         let radius_x = (self.right - self.left) / 2.0 * std::f32::consts::SQRT_2;
         let radius_y = (self.bottom - self.top) / 2.0 * std::f32::consts::SQRT_2;
         let dx = (x - (self.left + self.right) / 2.0) / radius_x;
@@ -79,14 +79,14 @@ impl Pool {
 
 /// Where the headline of a centred soft theme sits: the two lines centred
 /// on the canvas as a pair.
-fn centred_baseline(canvas: &Canvas) -> f32 {
+pub(super) fn centred_baseline(canvas: &Canvas) -> f32 {
     let (_, center_y) = canvas_center(canvas);
     center_y + 4.0 * design_scale(canvas)
 }
 
 /// Paint the background plus `light` (RGB to add, in 0..255, from the
 /// position as fractions of the width and height), held back by the pool.
-fn paint_light(
+pub(super) fn paint_light(
     canvas: &mut Canvas,
     style: &ScreenStyle,
     pool: &Pool,
@@ -104,13 +104,13 @@ fn paint_light(
     });
 }
 
-fn channels(color: Rgb) -> [f32; 3] {
+pub(super) fn channels(color: Rgb) -> [f32; 3] {
     [f32::from(color.r), f32::from(color.g), f32::from(color.b)]
 }
 
 /// `color` with its hue turned by `degrees`, keeping its brightness (the
 /// hue-rotate matrix of the CSS filter effects spec).
-fn hue_turned(color: Rgb, degrees: f32) -> [f32; 3] {
+pub(super) fn hue_turned(color: Rgb, degrees: f32) -> [f32; 3] {
     let (sin, cos) = degrees.to_radians().sin_cos();
     let [r, g, b] = channels(color);
     let row = |lr: f32,
@@ -149,7 +149,7 @@ fn hue_turned(color: Rgb, degrees: f32) -> [f32; 3] {
 }
 
 /// Width over height, so shapes measured in heights stay round.
-fn aspect(canvas: &Canvas) -> f32 {
+pub(super) fn aspect(canvas: &Canvas) -> f32 {
     canvas.width() as f32 / canvas.height() as f32
 }
 
@@ -265,7 +265,7 @@ mod tests {
     /// skip the text blocks between keyframes.
     #[test]
     fn the_pool_round_the_text_stays_still() {
-        for theme in [SlateTheme::Aurora, SlateTheme::Halo, SlateTheme::Tide] {
+        for theme in SlateTheme::ALL.into_iter().filter(|theme| theme.is_soft()) {
             let style = style(theme);
             let frame = |phase: f32| {
                 let mut canvas = Canvas::new(640, 360, style.background);
@@ -298,7 +298,7 @@ mod tests {
     /// sums, so a pixel may round one level apart; a seam would be more.
     #[test]
     fn the_light_comes_round_to_where_it_started() {
-        for theme in [SlateTheme::Aurora, SlateTheme::Halo, SlateTheme::Tide] {
+        for theme in SlateTheme::ALL.into_iter().filter(|theme| theme.is_soft()) {
             let style = style(theme);
             let frame = |phase: f32| {
                 let mut canvas = Canvas::new(320, 180, style.background);
