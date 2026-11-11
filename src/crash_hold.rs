@@ -22,7 +22,7 @@
 //! unbroken stream.
 
 use crate::controller::{Controller, DestinationState};
-use crate::crash_protection::CrashProtection;
+use crate::crash_protection::{CrashProtection, SlateTheme};
 use crate::h264::{AudioEgress, VideoEgress};
 use crate::rtmp::client::EgressSink;
 use crate::slate::{Interval, SlateCodec, SlateLoop, StreamShape};
@@ -487,7 +487,7 @@ pub async fn play(
             VideoSource::Screen(target) => {
                 let built = ctrl
                     .slate_cache
-                    .get(&settings, target.shape, target.codec)
+                    .for_hold(&settings, target.shape, target.codec)
                     .await;
                 let Some(slate) = built else {
                     ctrl.log(format!(
@@ -706,17 +706,19 @@ fn audio_tag(audio: &SilentAudio) -> Vec<u8> {
 /// is live and a hold usually starts with one ready.
 #[derive(Default)]
 pub struct SlateCache {
-    /// Per (width, height, codec): the loop and the settings it was built
-    /// with.
+    /// Per (width, height, codec, theme): the loop and the settings it was
+    /// built with.
     ready: crate::sync::Mutex<HashMap<SlateKey, (CrashProtection, Arc<SlateLoop>)>>,
     building: crate::sync::Mutex<HashSet<SlateKey>>,
 }
 
-/// A slate loop's (width, height, codec).
-type SlateKey = (usize, usize, SlateCodec);
+/// A slate loop's (width, height, codec, theme). The theme is part of it
+/// so a soft theme's stand-in and the soft loop itself can be built side
+/// by side.
+type SlateKey = (usize, usize, SlateCodec, SlateTheme);
 
-fn slate_key(shape: StreamShape, codec: SlateCodec) -> SlateKey {
-    (shape.width, shape.height, codec)
+fn slate_key(settings: &CrashProtection, shape: StreamShape, codec: SlateCodec) -> SlateKey {
+    (shape.width, shape.height, codec, settings.theme)
 }
 
 impl SlateCache {
@@ -739,7 +741,7 @@ impl SlateCache {
         codec: SlateCodec,
     ) -> Option<Arc<SlateLoop>> {
         const BUILD_POLL: Duration = Duration::from_millis(50);
-        let key = slate_key(shape, codec);
+        let key = slate_key(settings, shape, codec);
         loop {
             if let Some(slate) = self.cached(settings, key) {
                 return Some(slate);
@@ -765,6 +767,30 @@ impl SlateCache {
         task.await.ok().flatten()
     }
 
+    /// The loop a hold plays now. A soft theme takes a few seconds to
+    /// build, so until it is ready the hold plays its flat stand-in, in the
+    /// same colours and words and built in a fraction of a second, and the
+    /// soft loop goes on building for the next hold.
+    pub async fn for_hold(
+        self: &Arc<Self>,
+        settings: &CrashProtection,
+        shape: StreamShape,
+        codec: SlateCodec,
+    ) -> Option<Arc<SlateLoop>> {
+        let Some(stand_in) = settings.theme.quick_stand_in() else {
+            return self.get(settings, shape, codec).await;
+        };
+        if let Some(slate) = self.cached(settings, slate_key(settings, shape, codec)) {
+            return Some(slate);
+        }
+        self.prebuild(settings, shape, codec);
+        let quick = CrashProtection {
+            theme: stand_in,
+            ..settings.clone()
+        };
+        self.get(&quick, shape, codec).await
+    }
+
     /// Start building the loop for `shape` in `codec` in the background,
     /// unless it is ready or already being built.
     pub fn prebuild(
@@ -773,7 +799,7 @@ impl SlateCache {
         shape: StreamShape,
         codec: SlateCodec,
     ) {
-        let key = slate_key(shape, codec);
+        let key = slate_key(settings, shape, codec);
         if self.cached(settings, key).is_some() || self.building.lock().contains(&key) {
             return;
         }
@@ -1002,6 +1028,33 @@ mod tests {
         let later = cache.get(&settings, shape, SlateCodec::H264);
         let later = tokio::time::timeout(Duration::from_secs(10), later);
         assert!(later.await.expect("not wedged").is_some());
+    }
+
+    /// OBS drops before the soft loop is built: the hold must not wait for
+    /// it. It gets the flat stand-in (one 2 s interval) at once, the soft
+    /// loop finishes building beside it, and the next hold gets that one.
+    #[tokio::test]
+    async fn a_soft_screen_not_yet_built_stands_in_flat() {
+        let cache = Arc::new(SlateCache::default());
+        let settings = CrashProtection {
+            theme: SlateTheme::Halo,
+            ..CrashProtection::default()
+        };
+        let shape = StreamShape {
+            width: 320,
+            height: 180,
+            fps: SLATE_FPS,
+        };
+        let first = cache.for_hold(&settings, shape, SlateCodec::Hevc).await;
+        assert_eq!(first.expect("a loop to play").intervals.len(), 1);
+        let soft = tokio::time::timeout(
+            Duration::from_secs(30),
+            cache.get(&settings, shape, SlateCodec::Hevc),
+        );
+        assert!(soft.await.expect("the soft build finishes").is_some());
+        let next = cache.for_hold(&settings, shape, SlateCodec::Hevc).await;
+        let intervals = SlateTheme::Halo.loop_intervals();
+        assert_eq!(next.expect("a loop to play").intervals.len(), intervals);
     }
 
     /// OBS is back, but its new video comes in too slowly to span the
