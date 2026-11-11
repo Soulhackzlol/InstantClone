@@ -50,6 +50,7 @@ mod controller;
 mod crash_hold;
 mod crash_protection;
 mod crypto;
+mod delay_transition;
 mod diagnostics;
 mod egress_failure;
 mod h264;
@@ -918,6 +919,8 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // decides whether to open a hold the instant OBS drops.
         let crash_settings = rx.borrow().crash_protection.clone();
         ctrl.update_crash_protection(crash_settings.clone());
+        let transition_settings = rx.borrow().delay_transition.clone();
+        ctrl.update_delay_transition(transition_settings.clone());
 
         // Keep the managed test-sink child in sync with the desired set
         // BEFORE the pump diff below, so a freshly enabled sink
@@ -1192,7 +1195,17 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         ctrl.check_ingest_freeze();
         if ingest_alive && crash_settings.enabled {
             for id in running.keys() {
-                crash_hold::prebuild_for(&ctrl, &ctrl.destination_state(id), &crash_settings);
+                let dest = ctrl.destination_state(id);
+                crash_hold::prebuild_for(&ctrl, &dest, &ctrl.slate_cache, &crash_settings);
+            }
+        }
+        // Likewise the delay transition's screen, so a delay turned on
+        // plays it at once.
+        if ingest_alive && transition_settings.enabled {
+            let screen = ctrl.transition_screen();
+            for id in running.keys() {
+                let dest = ctrl.destination_state(id);
+                crash_hold::prebuild_for(&ctrl, &dest, &ctrl.transition_cache, &screen);
             }
         }
 

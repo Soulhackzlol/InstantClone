@@ -22,6 +22,7 @@ function settingsBody(){
     auto_arm_delay_ms:String(Math.max(1, Math.min(DELAY_MAX_S, parseInt($('s-auto-arm-secs').value,10)||15)) * 1000),
   });
   Object.entries(cpFields()).forEach(([k, v]) => body.append(k, v));
+  Object.entries(dtFields()).forEach(([k, v]) => body.append(k, v));
   return body;
 }
 // The tray icon's color, Windows only (there is no tray elsewhere). The dots

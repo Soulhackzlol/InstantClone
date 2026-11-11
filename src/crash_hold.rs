@@ -138,6 +138,28 @@ pub struct HoldOutcome {
     pub last_ts: u32,
 }
 
+/// Why a delay transition's screen stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionExit {
+    /// The delay has built up behind the screen: rejoin at a keyframe at
+    /// or after `from_seq`, where viewers left off.
+    Rejoin { from_seq: u64 },
+    /// OBS went away, or a crash-protection hold began: the pump's own
+    /// paths take over from where viewers left off.
+    Interrupted,
+    /// The screen couldn't be put on air (no loop for this destination):
+    /// nothing was sent, so the delay jumps as it does without a screen.
+    Unavailable,
+    /// The destination is shutting down.
+    Ended,
+}
+
+pub struct TransitionOutcome {
+    pub exit: TransitionExit,
+    /// Last output timestamp sent, so the pump's timeline stays monotonic.
+    pub last_ts: u32,
+}
+
 /// How a destination already receives a track, so the hold's tags are
 /// framed exactly like the stream's own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,17 +252,35 @@ pub fn covers(ctrl: &Controller, dest: &DestinationState) -> bool {
     plan_for(ctrl, dest).is_ok()
 }
 
-/// Keep a reconnect loop encoded for each of `dest`'s video tracks.
-pub fn prebuild_for(ctrl: &Controller, dest: &DestinationState, settings: &CrashProtection) {
+/// Keep a loop of the screen `settings` describe encoded in `cache` for
+/// each of `dest`'s video tracks.
+pub fn prebuild_for(
+    ctrl: &Controller,
+    dest: &DestinationState,
+    cache: &Arc<SlateCache>,
+    settings: &CrashProtection,
+) {
     let Some(egress) = dest.video_egress() else {
         return;
     };
     for (_, header) in video_headers_for(ctrl, egress) {
         if let Some(target) = screen_target(&header) {
-            ctrl.slate_cache
-                .prebuild(settings, target.shape, target.codec);
+            cache.prebuild(settings, target.shape, target.codec);
         }
     }
+}
+
+/// Whether a delay transition can play for `dest`: it is on, and every
+/// video track the destination gets can show the screen. A track the
+/// screens can't stand in for (AV1, 10-bit HEVC) would sit on a frozen
+/// frame, so those destinations jump as they always have.
+pub fn transition_covers(ctrl: &Controller, dest: &DestinationState) -> bool {
+    ctrl.delay_transition().enabled
+        && plan_for(ctrl, dest).is_ok_and(|plan| {
+            plan.video
+                .iter()
+                .all(|source| matches!(source, VideoSource::Screen(_)))
+        })
 }
 
 /// Whether the hold may play this video tag's track by holding its last
@@ -470,48 +510,153 @@ pub async fn play(
         exit: HoldExit::Ended,
         last_ts: after_ts,
     };
+    let settings = ctrl.crash_protection();
+    let what = "crash protection";
+    let Some(screen) = screen_for(ctrl, dest, &ctrl.slate_cache, (&settings, what)).await else {
+        return Ok(ended);
+    };
+    ctrl.log(format!(
+        "[{}] crash protection: reconnect screen on air ({})",
+        dest.id,
+        describe(&screen.video)
+    ));
+    let mut rebuild: Option<Rebuild> = None;
+    let base = after_ts.wrapping_add(1);
+    let (exit, last_ts) = stream_loop(dest, sink, &screen, base, || {
+        hold_exit(ctrl, dest, &mut rebuild)
+    })
+    .await?;
+    Ok(HoldOutcome { exit, last_ts })
+}
+
+/// Play the delay transition's screen into `dest`, which paused just
+/// before `paused_at` (the next tag it would have sent), until the delay
+/// has built up behind it. `after_ts` is the last output timestamp sent.
+pub async fn play_transition(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    sink: &mut EgressSink,
+    (after_ts, paused_at): (u32, u64),
+) -> io::Result<TransitionOutcome> {
+    let settings = ctrl.transition_screen();
+    let what = "the delay transition";
+    let cache = &ctrl.transition_cache;
+    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what)).await else {
+        return Ok(TransitionOutcome {
+            exit: TransitionExit::Unavailable,
+            last_ts: after_ts,
+        });
+    };
+    ctrl.log(format!(
+        "[{}] delay transition: screen on air until {} of delay has built up ({})",
+        dest.id,
+        minutes_seconds(Duration::from_millis(ctrl.target_delay_ms().into())),
+        describe(&screen.video)
+    ));
+    let mut rebuild = Some(Rebuild {
+        after_seq: paused_at.checked_sub(1),
+        since: Instant::now(),
+    });
+    let base = after_ts.wrapping_add(1);
+    let (exit, last_ts) = stream_loop(dest, sink, &screen, base, || {
+        transition_exit(ctrl, dest, &mut rebuild)
+    })
+    .await?;
+    Ok(TransitionOutcome { exit, last_ts })
+}
+
+/// A screen ready to play into one destination: a track per video track it
+/// gets, and silence per AAC track.
+struct Screen {
+    video: Vec<VideoTrack>,
+    audio: Vec<SilentAudio>,
+}
+
+/// The screen `settings` describe, from `cache`, framed for `dest`.
+/// `None` (and a log line naming `what` it was for) when the destination
+/// can't be covered or the loop couldn't be built.
+async fn screen_for(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    cache: &Arc<SlateCache>,
+    (settings, what): (&CrashProtection, &str),
+) -> Option<Screen> {
     let plan = match plan_for(ctrl, dest) {
         Ok(plan) => plan,
         Err(why) => {
             ctrl.log(format!(
-                "[{}] crash protection can't cover this destination: {why}",
+                "[{}] {what} can't cover this destination: {why}",
                 dest.id
             ));
-            return Ok(ended);
+            return None;
         }
     };
-    let settings = ctrl.crash_protection();
     let mut video = Vec::with_capacity(plan.video.len());
     for source in plan.video {
         video.push(match source {
             VideoSource::Screen(target) => {
-                let built = ctrl
-                    .slate_cache
-                    .for_hold(&settings, target.shape, target.codec)
-                    .await;
+                let built = cache.for_hold(settings, target.shape, target.codec).await;
                 let Some(slate) = built else {
-                    ctrl.log(format!(
-                        "[{}] crash protection couldn't build the reconnect screen",
-                        dest.id
-                    ));
-                    return Ok(ended);
+                    ctrl.log(format!("[{}] {what} couldn't build its screen", dest.id));
+                    return None;
                 };
                 VideoTrack::screen(&slate, target)
             }
             VideoSource::HeldFrame(tag) => VideoTrack::HeldFrame(tag),
         });
     }
-    ctrl.log(format!(
-        "[{}] crash protection: reconnect screen on air ({})",
-        dest.id,
-        describe(&video)
-    ));
     // No sequence header: the loop's keyframes carry their own parameter
     // sets in-band under ids the stream doesn't use (see slate::encoder),
     // so the destination's decoder keeps the stream's config for the way
     // back.
-    let base = after_ts.wrapping_add(1);
-    stream_loop(ctrl, dest, sink, &video, &plan.audio, base).await
+    Some(Screen {
+        video,
+        audio: plan.audio,
+    })
+}
+
+/// When a hold's screen stops: the hold ended, or OBS is back and its new
+/// video covers the armed delay.
+fn hold_exit(
+    ctrl: &Controller,
+    dest: &DestinationState,
+    rebuild: &mut Option<Rebuild>,
+) -> Option<HoldExit> {
+    match ctrl.hold_state() {
+        _ if dest.shutdown_requested.load(Ordering::Relaxed) => Some(HoldExit::Ended),
+        HoldState::Holding => {
+            // OBS may drop again while the delay rebuilds: start over.
+            *rebuild = None;
+            None
+        }
+        // Back, then gone again without a new hold (a deliberate stop).
+        HoldState::Resumed if !ctrl.ingest_alive() => Some(HoldExit::Ended),
+        // With a delay armed the screen stays up until OBS's new video
+        // covers it, so viewers never see live.
+        HoldState::Resumed => {
+            let delay = u64::from(ctrl.target_delay_ms());
+            delay_rebuilt(ctrl, rebuild, delay)
+                .map(|rejoin_from_seq| HoldExit::Resumed { rejoin_from_seq })
+        }
+        HoldState::Ended => Some(HoldExit::Ended),
+    }
+}
+
+/// When a delay transition's screen stops: the delay (as it is now, so a
+/// change or a cut meanwhile counts) has built up behind it, or OBS went.
+fn transition_exit(
+    ctrl: &Controller,
+    dest: &DestinationState,
+    rebuild: &mut Option<Rebuild>,
+) -> Option<TransitionExit> {
+    if dest.shutdown_requested.load(Ordering::Relaxed) {
+        return Some(TransitionExit::Ended);
+    }
+    if ctrl.obs_gone() || ctrl.hold_active() || !ctrl.ingest_alive() {
+        return Some(TransitionExit::Interrupted);
+    }
+    let delay = u64::from(ctrl.target_delay_ms());
+    delay_rebuilt(ctrl, rebuild, delay).map(|from_seq| TransitionExit::Rejoin { from_seq })
 }
 
 /// "2560x1440 HEVC, 1280x720 H.264, last keyframe held" for the log.
@@ -529,42 +674,24 @@ fn describe(video: &[VideoTrack]) -> String {
 }
 
 /// Send screen frames and silent audio, interleaved by timestamp and paced
-/// in real time, until OBS returns or the hold ends.
-async fn stream_loop(
-    ctrl: &Arc<Controller>,
+/// in real time from `base`, until `exit` says why to stop. Answers that
+/// reason and the last output timestamp sent.
+async fn stream_loop<Exit>(
     dest: &Arc<DestinationState>,
     sink: &mut EgressSink,
-    video: &[VideoTrack],
-    audio: &[SilentAudio],
+    screen: &Screen,
     base: u32,
-) -> io::Result<HoldOutcome> {
+    mut exit: impl FnMut() -> Option<Exit>,
+) -> io::Result<(Exit, u32)> {
+    let (video, audio) = (&screen.video, &screen.audio);
     let frame_ms = 1000.0 / SLATE_FPS as f64;
     let start = tokio::time::Instant::now();
     let mut video_index = 0u64;
     let mut audio_index = vec![0u64; audio.len()];
     let mut last_ts = base;
-    let mut rebuild: Option<Rebuild> = None;
     loop {
-        let exit = match ctrl.hold_state() {
-            _ if dest.shutdown_requested.load(Ordering::Relaxed) => Some(HoldExit::Ended),
-            HoldState::Holding => {
-                // OBS may drop again while the delay rebuilds: start over.
-                rebuild = None;
-                None
-            }
-            // Back, then gone again without a new hold (a deliberate stop).
-            HoldState::Resumed if !ctrl.ingest_alive() => Some(HoldExit::Ended),
-            // With a delay armed the screen stays up until OBS's new video
-            // covers it, so viewers never see live.
-            HoldState::Resumed => {
-                let delay = u64::from(ctrl.target_delay_ms());
-                delay_rebuilt(ctrl, &mut rebuild, delay)
-                    .map(|rejoin_from_seq| HoldExit::Resumed { rejoin_from_seq })
-            }
-            HoldState::Ended => Some(HoldExit::Ended),
-        };
-        if let Some(exit) = exit {
-            return Ok(HoldOutcome { exit, last_ts });
+        if let Some(reason) = exit() {
+            return Ok((reason, last_ts));
         }
         sink.drain_pings().await?;
 
@@ -586,7 +713,7 @@ async fn stream_loop(
             sink.send_audio(ts, &audio_tag(&audio[track])).await?;
             audio_index[track] += 1;
         } else {
-            for track in video {
+            for track in video.iter() {
                 let Some(tag) = video_frame(track, video_index) else {
                     continue;
                 };

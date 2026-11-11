@@ -3073,6 +3073,7 @@ fn is_settable_key(k: &str) -> bool {
         || k.starts_with("hotkey.")
         || k.starts_with("midi.")
         || k.starts_with(crate::crash_protection::KEY_PREFIX)
+        || k.starts_with(crate::delay_transition::KEY_PREFIX)
 }
 
 async fn post_config(
@@ -5540,6 +5541,10 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
             s.crash_protection
                 .set(&k[crate::crash_protection::KEY_PREFIX.len()..], value);
         }
+        k if k.starts_with(crate::delay_transition::KEY_PREFIX) => {
+            s.delay_transition
+                .set(&k[crate::delay_transition::KEY_PREFIX.len()..], value);
+        }
         // Empty means "every device", which is also what an unknown name
         // amounts to - the listener simply finds nothing to open and the
         // dashboard says so.
@@ -7035,6 +7040,27 @@ mod tests {
                 reads_as: "true",
                 reset: "off",
                 read: |s| s.crash_protection.enabled.to_string(),
+            },
+            SettableRow {
+                key: "delay_transition.enabled",
+                set: "on",
+                reads_as: "true",
+                reset: "off",
+                read: |s| s.delay_transition.enabled.to_string(),
+            },
+            SettableRow {
+                key: "delay_transition.headline",
+                set: "Be right back",
+                reads_as: "Be right back",
+                reset: "Back in a moment",
+                read: |s| s.delay_transition.headline.clone(),
+            },
+            SettableRow {
+                key: "delay_transition.subline",
+                set: "Grab a drink",
+                reads_as: "Grab a drink",
+                reset: "The stream picks up right where it left off",
+                read: |s| s.delay_transition.subline.clone(),
             },
             SettableRow {
                 key: "crash_protection.hold_secs",

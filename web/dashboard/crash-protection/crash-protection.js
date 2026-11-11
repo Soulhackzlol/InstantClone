@@ -216,6 +216,46 @@ function cpApplyConfig(cp){
   cpRender();
 }
 cpInit();
+
+// ── Delay transition (System > General) ──────────────────────────────────
+// A screen instead of a jump back when a delay turns on. Its look is the
+// crash screen's; only its words are its own.
+let dtDefaults = {headline:'', subline:''};
+function dtFields(){
+  return {
+    'delay_transition.enabled': $('s-dt-enabled').checked ? 'true' : 'false',
+    'delay_transition.headline': $('s-dt-headline').value,
+    'delay_transition.subline': $('s-dt-subline').value,
+  };
+}
+function dtRender(){
+  $('s-dt-text').hidden = !$('s-dt-enabled').checked;
+  $('s-dt-text-reset').hidden = $('s-dt-headline').value === dtDefaults.headline
+    && $('s-dt-subline').value === dtDefaults.subline;
+  updateSaveBar();
+}
+function dtApplyConfig(dt){
+  if (!dt) return;
+  dtDefaults = dt.defaults || dtDefaults;
+  $('s-dt-enabled').checked = !!dt.enabled;
+  $('s-dt-headline').value = dt.headline || '';
+  $('s-dt-subline').value = dt.subline || '';
+  dtRender();
+}
+$('s-dt-enabled').onchange = dtRender;
+$('s-dt-headline').oninput = dtRender;
+$('s-dt-subline').oninput = dtRender;
+$('s-dt-text-reset').onclick = () => {
+  $('s-dt-headline').value = dtDefaults.headline;
+  $('s-dt-subline').value = dtDefaults.subline;
+  dtRender();
+};
+// The style lives on the Crash protection card: take the streamer there.
+$('s-dt-style').onclick = e => {
+  e.preventDefault();
+  const tab = document.querySelector('#sys-sub-tabs [data-subtab="crash"]');
+  if (tab) tab.click();
+};
 // The preview plays only while it can be seen: scrolled away it rests, so
 // an open System pane costs nothing for a film strip nobody is watching.
 if ('IntersectionObserver' in window){

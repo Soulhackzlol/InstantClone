@@ -737,6 +737,11 @@ pub struct Controller {
     hold: crate::sync::Mutex<Option<crate::crash_hold::Hold>>,
     /// Encoded reconnect-screen loops, shared by every destination.
     pub slate_cache: Arc<crate::crash_hold::SlateCache>,
+    /// The delay transition settings. See `crate::delay_transition`.
+    delay_transition: crate::sync::Mutex<crate::delay_transition::DelayTransition>,
+    /// Encoded delay-transition loops, kept apart from the reconnect
+    /// screen's so neither pushes the other out.
+    pub transition_cache: Arc<crate::crash_hold::SlateCache>,
     /// The latest keyframe of each track the reconnect screen can't
     /// replace (HEVC, AV1), keyed like `video_seq_headers`: a hold re-sends
     /// it instead. See `crash_hold::is_held_keyframe`.
@@ -961,6 +966,8 @@ impl Controller {
             crash_protection_on: AtomicBool::new(false),
             hold: crate::sync::Mutex::new(None),
             slate_cache: Arc::default(),
+            delay_transition: crate::sync::Mutex::new(Default::default()),
+            transition_cache: Arc::default(),
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
             rate_in: RateMeter::default(),
@@ -2660,6 +2667,25 @@ impl Controller {
         self.crash_protection.lock().clone()
     }
 
+    /// Mirror the delay transition settings (the supervisor calls this).
+    /// Switched off, its loops are dropped.
+    pub fn update_delay_transition(&self, settings: crate::delay_transition::DelayTransition) {
+        if !settings.enabled {
+            self.transition_cache.clear();
+        }
+        *self.delay_transition.lock() = settings;
+    }
+
+    pub fn delay_transition(&self) -> crate::delay_transition::DelayTransition {
+        self.delay_transition.lock().clone()
+    }
+
+    /// The screen a delay transition plays: the reconnect screen's look
+    /// with the transition's words.
+    pub fn transition_screen(&self) -> crate::crash_protection::CrashProtection {
+        self.delay_transition().screen(&self.crash_protection())
+    }
+
     /// Whether destinations are being held on the reconnect screen now.
     pub fn hold_active(&self) -> bool {
         self.hold_open.load(Ordering::Relaxed)
@@ -3805,6 +3831,18 @@ async fn pump_dest(
                 // fresh, so the cut lands on this same iteration.
                 ctrl.maybe_fire_safe_cut();
                 if let Some(cut) = compute_delay_cut(ctrl, &meta) {
+                    // A delay turned on or raised takes viewers back in
+                    // time. With the transition on they see its screen
+                    // instead, and the stream goes on from here.
+                    let goes_back = cut.target.seq < meta.seq;
+                    if goes_back && crate::crash_hold::transition_covers(ctrl, dest) {
+                        match transition_into_delay(ctrl, dest, &mut sink, &mut state, meta).await?
+                        {
+                            Transition::Played => continue,
+                            Transition::Ended => return Ok(()),
+                            Transition::Unavailable => {}
+                        }
+                    }
                     apply_cut(ctrl, dest, &mut sink, &mut state, cut).await?;
                     continue;
                 }
@@ -3815,6 +3853,59 @@ async fn pump_dest(
         // current_delay_ms is derived server-side now (see Controller),
         // so pumps don't race to overwrite it.
     }
+}
+
+/// How a delay transition went, as the pump carries on from it.
+enum Transition {
+    /// The screen played and the pump rejoined the stream.
+    Played,
+    /// No screen could be put on air: nothing was sent, so jump instead.
+    Unavailable,
+    /// The destination's session ended.
+    Ended,
+}
+
+/// The delay is about to take viewers back in time: play the transition
+/// screen from where they are (`paused`, the next tag this pump would
+/// send) until the delay has built up behind it, then rejoin there.
+/// Nothing is replayed and nothing is missed: the stream is the delay
+/// later than it was.
+async fn transition_into_delay(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    sink: &mut EgressSink,
+    state: &mut EgressState,
+    paused: TagMeta,
+) -> io::Result<Transition> {
+    use crate::crash_hold::TransitionExit;
+    let screen_from = (last_output_ts(state), paused.seq);
+    let outcome = crate::crash_hold::play_transition(ctrl, dest, sink, screen_from).await?;
+    let rejoin = match outcome.exit {
+        TransitionExit::Unavailable => return Ok(Transition::Unavailable),
+        TransitionExit::Ended => {
+            let _ = sink.send_delete_stream().await;
+            return Ok(Transition::Ended);
+        }
+        TransitionExit::Rejoin { from_seq } => rejoin_idr(ctrl, dest, from_seq).await,
+        // OBS went away mid-screen: back to the keyframe viewers paused
+        // on, and the pump's own paths carry on from there (airing what
+        // the delay holds, then the reconnect screen if one covers it).
+        TransitionExit::Interrupted => ctrl.ring.newest_idr_at_or_before(paused.ts_ms),
+    };
+    // Continue the timeline from the last screen frame, so the rejoin's
+    // re-anchor stays strictly after it.
+    state.output_ts_base = outcome.last_ts;
+    state.input_ts_anchor = state.last_sent_input_ts;
+    let Some(idr) = rejoin else {
+        let _ = sink.send_delete_stream().await;
+        return Ok(Transition::Ended);
+    };
+    ctrl.log(format!(
+        "[{}] delay transition done - back on the stream, delayed",
+        dest.id
+    ));
+    rejoin_at(ctrl, dest, sink, state, idr).await?;
+    Ok(Transition::Played)
 }
 
 /// Output timestamp of the last tag this pump sent.
@@ -4737,6 +4828,9 @@ mod hold_sim;
 
 #[cfg(test)]
 mod delay_sim;
+
+#[cfg(test)]
+mod transition_sim;
 
 #[cfg(test)]
 mod user_sim;

@@ -293,13 +293,13 @@ impl CrashProtection {
 
 /// Checkbox values arrive as "true"/"false" or "on"/"" depending on the
 /// caller, the same convention the other boolean settings use.
-fn is_truthy(value: &str) -> bool {
+pub(crate) fn is_truthy(value: &str) -> bool {
     !matches!(value, "" | "false" | "0" | "off")
 }
 
 /// Screen text: no control characters (the config format is line-based),
 /// surrounding whitespace trimmed, capped to what fits on the screen.
-fn sanitize_text(value: &str, max_chars: usize) -> String {
+pub(crate) fn sanitize_text(value: &str, max_chars: usize) -> String {
     value
         .chars()
         .filter(|c| !c.is_control())
