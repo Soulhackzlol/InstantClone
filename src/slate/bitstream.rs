@@ -7,6 +7,9 @@ pub struct BitWriter {
     bytes: Vec<u8>,
     current: u8,
     filled: u8,
+    /// Placeholder bits a `continuing` writer starts with, which `append`
+    /// leaves out.
+    lead_in: u8,
 }
 
 impl BitWriter {
@@ -58,12 +61,30 @@ impl BitWriter {
         self.bytes.len() * 8 + usize::from(self.filled)
     }
 
-    /// Every bit of `other`, in order, after this writer's own.
-    pub fn append(&mut self, other: &BitWriter) {
-        for byte in &other.bytes {
-            self.bits(u32::from(*byte), 8);
+    /// An empty writer for bits that will be appended to `writer`: it
+    /// starts at the same place within a byte, so whatever aligns to a
+    /// byte in it (I_PCM samples) aligns the same once appended.
+    pub fn continuing(writer: &BitWriter) -> Self {
+        let mut continuing = Self::new();
+        for _ in 0..writer.filled {
+            continuing.bit(false);
         }
-        self.bits(u32::from(other.current), other.filled);
+        continuing.lead_in = writer.filled;
+        continuing
+    }
+
+    /// Every bit of `other` after its lead-in, in order, after this
+    /// writer's own. `other` must continue from where this writer is.
+    pub fn append(&mut self, other: &BitWriter) {
+        debug_assert_eq!(self.filled, other.lead_in, "appended from another position");
+        let whole_bytes = other.bytes.iter().map(|byte| (*byte, 8));
+        let last = std::iter::once((other.current, other.filled));
+        let mut skip = other.lead_in;
+        for (byte, count) in whole_bytes.chain(last) {
+            let take = count - skip.min(count);
+            self.bits(u32::from(byte), take);
+            skip -= skip.min(count);
+        }
     }
 
     /// Zero bits up to the next byte boundary (pcm_alignment_zero_bit).
@@ -172,6 +193,29 @@ mod tests {
             written(|w| w.bits(0xDEAD_BEEF, 32)),
             vec![0xDE, 0xAD, 0xBE, 0xEF, 0x80]
         );
+    }
+
+    /// Bits written to a continuing writer land exactly as if written to
+    /// the original, byte alignment included.
+    #[test]
+    fn a_continuing_writer_appends_as_if_written_in_place() {
+        let mut direct = BitWriter::new();
+        let mut via = BitWriter::new();
+        for w in [&mut direct, &mut via] {
+            w.bits(0b101, 3);
+        }
+        let fill = |w: &mut BitWriter| {
+            w.ue(4);
+            w.align_with_zeros();
+            w.bytes(&[0xAB, 0xCD]);
+            w.bits(0b11, 2);
+        };
+        fill(&mut direct);
+        let mut scratch = BitWriter::continuing(&via);
+        fill(&mut scratch);
+        via.append(&scratch);
+        assert_eq!(via.bit_len(), direct.bit_len());
+        assert_eq!(via.finish(), direct.finish());
     }
 
     #[test]

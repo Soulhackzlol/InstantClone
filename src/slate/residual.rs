@@ -291,6 +291,41 @@ pub fn rebuild_luma(levels: &LumaLevels, qp: i32) -> [i32; 256] {
     residual
 }
 
+/// Transform and quantise a 16x16 residual (raster, 256 samples) as
+/// sixteen 4x4 blocks, each with its DC term in place: how inter
+/// macroblocks code their luma. Blocks by raster position, `4 * row +
+/// column`.
+pub fn quantize_luma_4x4(residual: &[i32; 256], qp: i32) -> [Block4; 16] {
+    let shift = 15 + qp / 6;
+    let factors = &QUANT_FACTOR[(qp % 6) as usize];
+    std::array::from_fn(|block| {
+        let (block_row, block_column) = (block / 4, block % 4);
+        let samples: Block4 = std::array::from_fn(|at| {
+            residual[(4 * block_row + at / 4) * 16 + 4 * block_column + at % 4]
+        });
+        let coefficients = forward_core(&samples);
+        std::array::from_fn(|index| {
+            quantize(coefficients[index], factors[position_class(index)], shift)
+        })
+    })
+}
+
+/// The 16x16 residual a decoder rebuilds from `quantize_luma_4x4`'s
+/// levels (8.5.12): every coefficient, DC included, scaled alike.
+pub fn rebuild_luma_4x4(levels: &[Block4; 16], qp: i32) -> [i32; 256] {
+    let mut residual = [0; 256];
+    for (block, block_levels) in levels.iter().enumerate() {
+        let scaled = std::array::from_fn(|index| rescale_ac(block_levels[index], qp, index));
+        let samples = inverse_core(&scaled);
+        let (block_row, block_column) = (block / 4, block % 4);
+        for row in 0..4 {
+            let start = (4 * block_row + row) * 16 + 4 * block_column;
+            residual[start..start + 4].copy_from_slice(&samples[4 * row..4 * row + 4]);
+        }
+    }
+    residual
+}
+
 /// The quantised coefficients of one 8x8 chroma block.
 pub struct ChromaLevels {
     /// The four 4x4 blocks' DC terms after their 2x2 transform, raster.

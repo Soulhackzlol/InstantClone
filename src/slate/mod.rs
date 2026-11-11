@@ -13,6 +13,7 @@ mod bitstream;
 mod cabac;
 mod cavlc_tables;
 mod encoder;
+mod fidelity;
 mod font;
 mod hevc;
 mod hevc_residual;
@@ -436,7 +437,10 @@ mod tests {
     }
 
     /// Every theme's loop at `width` x `height`, in both codecs, built at
-    /// the rate a hold really uses, stays under `max_kbps`.
+    /// the rate a hold really uses, stays under `max_kbps`, and a soft
+    /// theme under twice that: light that moves everywhere costs more than
+    /// a few moving shapes, and the screen replaces a stream that carries
+    /// several times as much.
     fn assert_every_theme_fits(width: usize, height: usize, max_kbps: usize) {
         let shape = StreamShape {
             width,
@@ -456,8 +460,13 @@ mod tests {
             let loop_ms = slate.intervals.len() * KEYFRAME_INTERVAL_MS;
             // Bits per millisecond are kbps.
             let kbps = loop_bytes * 8 / loop_ms;
+            let budget = if theme.is_soft() {
+                2 * max_kbps
+            } else {
+                max_kbps
+            };
             assert!(
-                kbps < max_kbps,
+                kbps < budget,
                 "{theme:?} {codec:?} loop at {width}x{height} runs at {kbps} kbps"
             );
         }

@@ -156,8 +156,8 @@ fn aspect(canvas: &Canvas) -> f32 {
 /// Three glows, in the accent and the hues either side of it, each
 /// circling its own spot once per loop and breathing as it goes.
 pub fn draw_aurora(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
-    const ORBIT: f32 = 0.07;
-    const SPREAD: f32 = 0.10;
+    const ORBIT: f32 = 0.05;
+    const SPREAD: f32 = 0.085;
     const STRENGTH: f32 = 0.7;
     let glows = [
         (channels(style.accent), (0.20, 0.28), 0.0),
@@ -173,7 +173,7 @@ pub fn draw_aurora(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
             let angle = TAU * (phase + offset);
             let dx = (x - spot_x - ORBIT * angle.cos()) * aspect;
             let dy = y - spot_y - ORBIT * angle.sin();
-            let breath = 0.8 + 0.2 * (angle * 2.0).sin();
+            let breath = 0.9 + 0.1 * angle.sin();
             let glow = STRENGTH * breath * (-(dx * dx + dy * dy) / SPREAD).exp();
             for channel in 0..3 {
                 light[channel] += tint[channel] * glow;
@@ -220,19 +220,21 @@ pub fn draw_halo(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
 /// towards the bottom of the screen.
 pub fn draw_tide(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     let layers = [
-        (channels(style.accent), 0.5_f32, 1.1, 1.0, 0.46),
-        (hue_turned(style.accent, 40.0), -0.35, 0.8, -1.0, 0.34),
+        (channels(style.accent), 0.5_f32, 0.7, 1.0, 0.46),
+        (hue_turned(style.accent, 40.0), -0.35, 0.5, -1.0, 0.34),
     ];
     let baseline = centred_baseline(canvas);
     let pool = Pool::around_text(canvas, style, baseline);
     let aspect = aspect(canvas);
     paint_light(canvas, style, &pool, |x, y| {
         let mut light = [0.0; 3];
-        let rising = 0.3 + 0.7 * y;
+        // Light rises from the bottom: none in the top fifth, all of it at
+        // the bottom edge.
+        let rising = ((y - 0.2) / 0.8).clamp(0.0, 1.0).powi(2);
         for (tint, slant, waves, direction, strength) in layers {
             let along = x * aspect * slant.sin() + y * slant.cos();
             let swell = 0.5 + 0.5 * (TAU * (along * waves - direction * phase)).cos();
-            let glow = strength * rising * swell.powi(3);
+            let glow = strength * rising * swell * swell;
             for channel in 0..3 {
                 light[channel] += tint[channel] * glow;
             }
@@ -291,7 +293,9 @@ mod tests {
         }
     }
 
-    /// A loop has no seam: the last moment leads back into the first.
+    /// A loop has no seam: the moment after the last is the first again.
+    /// Phase 1.0 and 0.0 reach the same light through different float
+    /// sums, so a pixel may round one level apart; a seam would be more.
     #[test]
     fn the_light_comes_round_to_where_it_started() {
         for theme in [SlateTheme::Aurora, SlateTheme::Halo, SlateTheme::Tide] {
@@ -299,9 +303,19 @@ mod tests {
             let frame = |phase: f32| {
                 let mut canvas = Canvas::new(320, 180, style.background);
                 super::super::themes::draw(&mut canvas, &style, phase);
-                canvas.to_png()
+                canvas
             };
-            assert!(frame(0.0) == frame(1.0), "{theme:?}");
+            let (start, end) = (frame(0.0), frame(1.0));
+            for y in 0..180 {
+                for x in 0..320 {
+                    let (a, b) = (start.pixel(x, y), end.pixel(x, y));
+                    let worst =
+                        a.r.abs_diff(b.r)
+                            .max(a.g.abs_diff(b.g))
+                            .max(a.b.abs_diff(b.b));
+                    assert!(worst <= 1, "{theme:?}: pixel {x},{y} is {worst} levels off");
+                }
+            }
         }
     }
 

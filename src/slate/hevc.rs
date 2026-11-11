@@ -1106,12 +1106,7 @@ trait SampleSet {
 
 impl SampleSet for Vec<u8> {
     fn within(&self, other: &Self, tolerance: i32) -> bool {
-        if tolerance == 0 {
-            return self == other;
-        }
-        self.iter()
-            .zip(other)
-            .all(|(a, b)| i32::from(a.abs_diff(*b)) <= tolerance)
+        super::fidelity::is_faithful(self, other, tolerance)
     }
 
     fn distance(&self, other: &Self) -> u32 {

@@ -19,7 +19,10 @@
 //! Stream shape: Constrained Baseline, CAVLC, one slice per picture, a
 //! single reference frame, POC type 2 (output order = decode order).
 
+mod inter;
+
 use super::bitstream::{self, BitWriter};
+use super::fidelity;
 use super::raster::YuvFrame;
 use super::residual::{
     self, ChromaLevels, LevelTooLarge, LumaLevels, TokenTable, LUMA_BLOCK_AT, ZIGZAG,
@@ -241,7 +244,7 @@ pub fn encode_p_within(
         }
         w.ue(skip_run);
         skip_run = 0;
-        coder.code_intra(&mut w, index, P_SLICE_INTRA_OFFSET);
+        coder.code_p_macroblock(&mut w, index);
     }
     if skip_run > 0 {
         w.ue(skip_run);
@@ -405,7 +408,7 @@ impl<'a> PictureCoder<'a> {
             let Some(attempt) = self.attempt(*qp, sources, &luma, &chroma) else {
                 continue;
             };
-            let mut scratch = BitWriter::new();
+            let mut scratch = BitWriter::continuing(w);
             let modes = (luma.mode, chroma.mode);
             let written =
                 self.write_with_residual(&mut scratch, position, type_offset, modes, &attempt);
@@ -491,12 +494,7 @@ impl<'a> PictureCoder<'a> {
         attempt: &Attempt,
     ) -> Result<(), LevelTooLarge> {
         let has_luma_ac = attempt.luma.as_ref().is_some_and(LumaLevels::has_ac);
-        let chroma_levels = || attempt.chroma.iter().flatten();
-        let chroma_pattern = if chroma_levels().any(ChromaLevels::has_ac) {
-            2
-        } else {
-            u32::from(chroma_levels().any(ChromaLevels::has_dc))
-        };
+        let chroma_pattern = chroma_pattern(&attempt.chroma);
         let luma_pattern = if has_luma_ac { 12 } else { 0 };
         w.ue(type_offset + 1 + luma_mode + 4 * chroma_pattern + luma_pattern);
         w.ue(chroma_mode);
@@ -520,17 +518,30 @@ impl<'a> PictureCoder<'a> {
                 self.luma_counts[at] = total as u8;
             }
         }
-        if chroma_pattern == 0 {
+        self.write_chroma_residual(w, position, &attempt.chroma)
+    }
+
+    /// The chroma part of a macroblock's residual, as much of it as
+    /// `chroma_pattern` says is coded: the DC blocks of Cb and Cr, then
+    /// their AC blocks.
+    fn write_chroma_residual(
+        &mut self,
+        w: &mut BitWriter,
+        position: MbPosition,
+        chroma: &[Option<ChromaLevels>; 2],
+    ) -> Result<(), LevelTooLarge> {
+        let pattern = chroma_pattern(chroma);
+        if pattern == 0 {
             return Ok(());
         }
-        for levels in &attempt.chroma {
+        for levels in chroma {
             let dc = levels.as_ref().map_or([0; 4], |levels| levels.dc);
             residual::write_block(w, &dc, TokenTable::ChromaDc)?;
         }
-        if chroma_pattern == 1 {
+        if pattern == 1 {
             return Ok(());
         }
-        for (plane, levels) in attempt.chroma.iter().enumerate() {
+        for (plane, levels) in chroma.iter().enumerate() {
             for block in 0..4 {
                 let (column, row) = (block % 2, block / 2);
                 let ac: [i32; 15] = match levels {
@@ -600,6 +611,17 @@ impl<'a> PictureCoder<'a> {
     }
 }
 
+/// The chroma half of coded_block_pattern: 2 when any AC level is coded,
+/// 1 when only DC levels are, 0 for none.
+fn chroma_pattern(chroma: &[Option<ChromaLevels>; 2]) -> u32 {
+    let levels = || chroma.iter().flatten();
+    if levels().any(ChromaLevels::has_ac) {
+        2
+    } else {
+        u32::from(levels().any(ChromaLevels::has_dc))
+    }
+}
+
 /// nC from the coefficient counts of the blocks left of and above `at`:
 /// their rounded mean, or the one there is, or 0.
 fn n_c(counts: &[u8], at: usize, stride: usize, has_left: bool, has_top: bool) -> u32 {
@@ -648,13 +670,9 @@ fn write_square<const N: usize>(
     }
 }
 
-fn is_within<const N: usize>(a: &[u8; N], b: &[u8; N], tolerance: i32) -> bool {
-    if tolerance == 0 {
-        return a == b;
-    }
-    a.iter()
-        .zip(b)
-        .all(|(a, b)| i32::from(a.abs_diff(*b)) <= tolerance)
+/// Whether `shown` is close enough to `source` (see `fidelity`).
+fn is_within<const N: usize>(source: &[u8; N], shown: &[u8; N], tolerance: i32) -> bool {
+    fidelity::is_faithful(source, shown, tolerance)
 }
 
 fn difference<const N: usize>(source: &[u8; N], prediction: &[u8; N]) -> [i32; N] {
