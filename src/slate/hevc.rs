@@ -9,7 +9,12 @@
 //! - the same with transform residual, for soft detail (gradients,
 //!   glows). Only screens that allow a tolerance use it;
 //! - PCM, 16x16 only: the raw samples, for anything else;
-//! - skip: close enough to the previous picture already (zero motion).
+//! - skip: close enough to the previous picture already (zero motion);
+//! - carried over with residual: the previous picture's block (zero
+//!   motion, merged) plus a correction, for detail that changes a little,
+//!   like a dot getting brighter. Only with a tolerance, like residual.
+//!
+//! When more than one fits, the one estimated to take fewest bits wins.
 //!
 //! A screen coded with tolerance 0 is lossless. With a tolerance, every
 //! sample lands within that many levels of its source, and the encoder
@@ -45,8 +50,9 @@ const PROFILE_COMPATIBILITY: u32 = 0x6000_0000;
 const SLICE_QP: i32 = 26;
 const SLICE_TYPE_P: u32 = 1;
 const SLICE_TYPE_I: u32 = 2;
-/// One merge candidate: skipped blocks need no merge_idx, and with every
-/// inter block skipped at zero motion the candidate is always zero motion.
+/// One merge candidate, so no merge_idx: every inter block (skipped or
+/// carried over) is merged at zero motion, so the candidate always is
+/// zero motion too.
 const FIVE_MINUS_MAX_MERGE_CANDIDATES: u32 = 4;
 
 /// Intra prediction mode numbers (8.4.2) the encoder chooses from.
@@ -395,13 +401,26 @@ enum CuCoding {
         residual: Option<Residual>,
     },
     Pcm,
+    /// The previous picture's block, merged at zero motion, plus residual.
+    CarriedOver {
+        residual: Residual,
+    },
 }
 
-/// How one coding unit is coded, and the samples a decoder shows for it.
+/// How one coding unit is coded, the samples a decoder shows for it, and
+/// about how many bits it takes.
 struct Decision {
     coding: CuCoding,
     shown: Samples,
+    bits: usize,
 }
+
+/// Rough cost of a coding unit's syntax besides its residual: the flags
+/// and modes. Only used to compare one coding with another.
+const HEADER_BITS: usize = 6;
+/// A carried-over block this cheap is taken without trying intra: intra
+/// could save a few bits at most, for the cost of four predictions.
+const GOOD_ENOUGH_BITS: usize = HEADER_BITS + 32;
 
 /// A block's samples: luma, then Cb and Cr.
 #[derive(Clone)]
@@ -427,6 +446,9 @@ struct Contexts {
     split_cu: [Context; 3],
     cu_skip: [Context; 3],
     pred_mode: Context,
+    /// part_mode's first bin, and merge_flag: only inter units code them.
+    part_mode: Context,
+    merge_flag: Context,
     prev_intra_luma_pred: Context,
     intra_chroma_pred_mode: Context,
     /// ctxInc 1: the transform tree is never split (trafoDepth 0).
@@ -447,6 +469,8 @@ impl Contexts {
             // Only coded in P slices.
             cu_skip: [197, 185, 201].map(|value| Context::new(value, SLICE_QP)),
             pred_mode: Context::new(149, SLICE_QP),
+            part_mode: Context::new(154, SLICE_QP),
+            merge_flag: Context::new(110, SLICE_QP),
             prev_intra_luma_pred: pick(184, 154),
             intra_chroma_pred_mode: pick(63, 152),
             cbf_luma: pick(141, 111),
@@ -554,7 +578,8 @@ impl<'a> PictureCoder<'a> {
             if let CuCoding::Predicted {
                 residual: Some(residual),
                 ..
-            } = &decision.coding
+            }
+            | CuCoding::CarriedOver { residual } = &decision.coding
             {
                 finest = Some(finest.map_or(residual.qp, |qp| qp.min(residual.qp)));
             }
@@ -582,8 +607,9 @@ impl<'a> PictureCoder<'a> {
     }
 
     /// How to code `block`: skipped, a plain prediction, a prediction with
-    /// residual (at `fixed_qp` when given), or raw samples. `None` when a
-    /// 32x32 block can't be coded whole and must split.
+    /// residual (at `fixed_qp` when given), carried over with residual, or
+    /// raw samples. `None` when a 32x32 block can't be coded whole and
+    /// must split.
     fn decide(&mut self, block: Block, fixed_qp: Option<i32>) -> Option<Decision> {
         let source = self.read_samples(self.source, block);
         let current = self.read_samples(&self.shown, block);
@@ -591,8 +617,61 @@ impl<'a> PictureCoder<'a> {
             return Some(Decision {
                 coding: CuCoding::Skip,
                 shown: current,
+                bits: 1,
             });
         }
+        if !self.is_p || self.tolerance == 0 {
+            return self.decide_intra(block, fixed_qp, &source);
+        }
+        // Each coding takes transforms to try, so a clear winner stops the
+        // search: a small correction to the block already there, or else
+        // an intra prediction that needs none.
+        let carried = self.decide_carried_over(block, fixed_qp, &source, &current);
+        if carried
+            .as_ref()
+            .is_some_and(|carried| carried.bits <= GOOD_ENOUGH_BITS)
+        {
+            return carried;
+        }
+        let intra = self.decide_intra(block, fixed_qp, &source);
+        match (intra, carried) {
+            (Some(intra), Some(carried)) if carried.bits < intra.bits => Some(carried),
+            (intra, carried) => intra.or(carried),
+        }
+    }
+
+    /// The previous picture's block plus residual, when that lands within
+    /// the tolerance for fewer bits than raw samples.
+    fn decide_carried_over(
+        &mut self,
+        block: Block,
+        fixed_qp: Option<i32>,
+        source: &Samples,
+        current: &Samples,
+    ) -> Option<Decision> {
+        let needs = [
+            !source.luma.within(&current.luma, self.tolerance),
+            !source.chroma.within(&current.chroma, self.tolerance),
+        ];
+        let (residual, shown, bits) =
+            self.with_residual(block, source, current, needs, fixed_qp)?;
+        // Merged 2Nx2N with no residual would be a skip: never coded so.
+        let has_levels = residual.luma.is_some() || residual.chroma.iter().any(Option::is_some);
+        has_levels.then_some(Decision {
+            coding: CuCoding::CarriedOver { residual },
+            shown,
+            bits: bits + HEADER_BITS,
+        })
+    }
+
+    /// The intra codings: a plain prediction, one with residual, or raw
+    /// samples.
+    fn decide_intra(
+        &mut self,
+        block: Block,
+        fixed_qp: Option<i32>,
+        source: &Samples,
+    ) -> Option<Decision> {
         let luma_predictions = self.predictions(block, Plane::Luma);
         let chroma_predictions = [Plane::Cb, Plane::Cr].map(|plane| self.predictions(block, plane));
         let luma_candidates =
@@ -614,6 +693,7 @@ impl<'a> PictureCoder<'a> {
         let pcm = || Decision {
             coding: CuCoding::Pcm,
             shown: source.clone(),
+            bits: PCM_BITS,
         };
         let (Some((luma_mode, luma_close)), Some((chroma_mode, chroma_close))) = (luma, chroma)
         else {
@@ -633,8 +713,37 @@ impl<'a> PictureCoder<'a> {
                     residual: None,
                 },
                 shown: prediction,
+                bits: HEADER_BITS,
             });
         }
+        let needs = [!luma_close, !chroma_close];
+        match self.with_residual(block, source, &prediction, needs, fixed_qp) {
+            Some((residual, shown, bits)) => Some(Decision {
+                coding: CuCoding::Predicted {
+                    luma: luma_mode,
+                    chroma: chroma_mode,
+                    residual: Some(residual),
+                },
+                shown,
+                bits: bits + HEADER_BITS,
+            }),
+            None => (block.size == SPLIT_CU).then(pcm),
+        }
+    }
+
+    /// `prediction` corrected by residual in the planes `needs` names
+    /// (luma, chroma), at the coarsest QP on the ladder (or `fixed_qp`)
+    /// that lands within the tolerance: the residual, what a decoder shows
+    /// and the residual's estimated bits. `None` when no QP does it for
+    /// fewer bits than raw samples.
+    fn with_residual(
+        &mut self,
+        block: Block,
+        source: &Samples,
+        prediction: &Samples,
+        needs: [bool; 2],
+        fixed_qp: Option<i32>,
+    ) -> Option<(Residual, Samples, usize)> {
         let ladder: Vec<(usize, i32)> = match fixed_qp {
             Some(qp) => vec![(self.ladder_step, qp)],
             None => QP_LADDER
@@ -645,10 +754,10 @@ impl<'a> PictureCoder<'a> {
                 .collect(),
         };
         let pcm_bits = PCM_BITS * (block.size / SPLIT_CU).pow(2);
-        let coefficients = Coefficients::of(&source, &prediction, [!luma_close, !chroma_close]);
+        let coefficients = Coefficients::of(source, prediction, needs);
         for (step, qp) in ladder {
             let Some((residual, shown)) =
-                self.attempt(source.clone(), &prediction, &coefficients, qp)
+                self.attempt(source.clone(), prediction, &coefficients, qp)
             else {
                 continue;
             };
@@ -662,16 +771,9 @@ impl<'a> PictureCoder<'a> {
                 break;
             }
             self.ladder_step = step;
-            return Some(Decision {
-                coding: CuCoding::Predicted {
-                    luma: luma_mode,
-                    chroma: chroma_mode,
-                    residual: Some(residual),
-                },
-                shown,
-            });
+            return Some((residual, shown, bits));
         }
-        (block.size == SPLIT_CU).then(pcm)
+        None
     }
 
     /// The first candidate whose prediction is within the tolerance;
@@ -749,13 +851,23 @@ impl<'a> PictureCoder<'a> {
             self.cabac
                 .decision(&mut self.contexts.cu_skip[ctx_inc], is_skip);
             if !is_skip {
-                // pred_mode_flag: MODE_INTRA.
-                self.cabac.decision(&mut self.contexts.pred_mode, true);
+                // pred_mode_flag: 1 is MODE_INTRA.
+                let is_intra = !matches!(decision.coding, CuCoding::CarriedOver { .. });
+                self.cabac.decision(&mut self.contexts.pred_mode, is_intra);
             }
         }
         let is_split = block.size == SPLIT_CU;
         let intra_mode = match &decision.coding {
             CuCoding::Skip => None,
+            CuCoding::CarriedOver { residual } => {
+                // part_mode PART_2Nx2N, merge_flag; with one merge
+                // candidate there is no merge_idx, and a merged 2Nx2N unit
+                // has residual by definition, so no rqt_root_cbf either.
+                self.cabac.decision(&mut self.contexts.part_mode, true);
+                self.cabac.decision(&mut self.contexts.merge_flag, true);
+                self.code_transform_unit(block, Some(residual), true);
+                None
+            }
             CuCoding::Pcm => {
                 self.cabac.pcm(&pcm_samples(&decision.shown));
                 None
@@ -770,7 +882,7 @@ impl<'a> PictureCoder<'a> {
                     self.cabac.terminate(false);
                 }
                 self.code_intra_modes(block, *luma, *chroma);
-                self.code_transform_unit(block, residual.as_ref());
+                self.code_transform_unit(block, residual.as_ref(), false);
                 Some(*luma)
             }
         };
@@ -790,7 +902,7 @@ impl<'a> PictureCoder<'a> {
 
     /// The coded block flags, the QP delta when this is the CTU's first
     /// residual, then each plane's levels.
-    fn code_transform_unit(&mut self, block: Block, residual: Option<&Residual>) {
+    fn code_transform_unit(&mut self, block: Block, residual: Option<&Residual>, is_inter: bool) {
         let (luma, chroma) = match residual {
             Some(residual) => (
                 residual.luma.as_ref(),
@@ -798,13 +910,17 @@ impl<'a> PictureCoder<'a> {
             ),
             None => (None, [None, None]),
         };
-        // cbf_cb, cbf_cr, cbf_luma.
+        // cbf_cb, cbf_cr, cbf_luma. An inter unit with neither chroma flag
+        // has luma residual: its cbf_luma is inferred (7.3.8.8).
         self.cabac
             .decision(&mut self.contexts.cbf_chroma, chroma[0].is_some());
         self.cabac
             .decision(&mut self.contexts.cbf_chroma, chroma[1].is_some());
-        self.cabac
-            .decision(&mut self.contexts.cbf_luma, luma.is_some());
+        let is_luma_inferred = is_inter && chroma.iter().all(Option::is_none);
+        if !is_luma_inferred {
+            self.cabac
+                .decision(&mut self.contexts.cbf_luma, luma.is_some());
+        }
         let Some(residual) = residual else {
             return;
         };
