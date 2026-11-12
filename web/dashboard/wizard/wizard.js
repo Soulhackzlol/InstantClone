@@ -90,7 +90,7 @@ const LANG_FADE_MS = 140;
 // (data-lang-return on <html>, set before the first paint at the top of the page).
 function reloadForLanguage(){
   const inWizard = !$('wizard').hidden;
-  const tab = document.querySelector('.tab.on'), sub = document.querySelector('.tab-pane:not([hidden]) .sub-tab.on');
+  const tab = document.querySelector('.tab.on'), sub = document.querySelector('.tab-pane:not([hidden]) .sub-tab.on[data-subtab]');
   try {
     sessionStorage.setItem('instantclone_lang_return', JSON.stringify({view: inWizard ? 'wizard' : 'dashboard', height: $('wizard').offsetHeight,
       tab: tab && tab.dataset.tab, sub: sub && sub.dataset.subtab}));

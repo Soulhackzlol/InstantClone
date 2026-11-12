@@ -75,6 +75,8 @@ function sysFindGo(match){
   sysFindRender();
   input.blur();
   showSubTab('system', match.subtab);
+  // Screens shows one of its editors at a time (screens.js).
+  if (match.section.dataset.screen) screensShow(match.section.dataset.screen);
   if (match.section.tagName === 'DETAILS') match.section.open = true;
   match.section.scrollIntoView({behavior: 'smooth', block: 'start'});
   match.section.classList.remove('sys-found');

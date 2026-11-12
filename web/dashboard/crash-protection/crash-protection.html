@@ -1,9 +1,20 @@
-  <!-- Crash protection -->
-  <div class="sub-pane" data-subpane="crash" hidden>
+  <!-- Extras: the screens viewers see when the stream can't show OBS. Two
+       editors built alike, one at a time (screens.js): the reconnect screen
+       of Crash protection, and the Delay transition's. -->
+  <div class="sub-pane" data-subpane="extras" hidden>
+    <nav class="sub-tabs screens-switch" role="tablist" aria-label="Extras">
+      <span class="sub-tab-ind"></span>
+      <button type="button" class="sub-tab on" data-screen-tab="crash" role="tab" aria-selected="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.5 3 8.5 7 10 4-1.5 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span>Crash protection</span></button>
+      <button type="button" class="sub-tab" data-screen-tab="transition" role="tab" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/><path d="M9.5 2.5h5"/></svg>
+        <span>Delay transition</span></button>
+    </nav>
     <!-- Crash protection: keep destinations live on a reconnect screen when
          OBS crashes. Off by default; the rest of the card appears once it is
          turned on. Saved with the tab's Save settings button. -->
-    <section class="sys-section" id="s-cp-section" data-find="crash protection reconnect screen brb be right back slate obs crash freeze hold style theme">
+    <section class="sys-section" id="s-cp-section" data-screen="crash" data-find="crash protection reconnect screen brb be right back slate obs crash freeze hold style theme">
       <div class="ic-label">Crash protection</div>
       <label class="crash-check crash-master">
         <input type="checkbox" id="s-cp-enabled" onchange="cpSyncVisibility()">
@@ -16,10 +27,13 @@
         <div class="crash-stage">
           <div class="crash-stage-head">
             <span class="crash-label">What viewers see</span>
-            <div class="crash-seg" role="group" aria-label="Preview shape">
-              <button type="button" data-cp-shape="horizontal" aria-pressed="true">16:9</button>
-              <button type="button" data-cp-shape="vertical" aria-pressed="false">9:16</button>
-            </div>
+            <span class="crash-stage-tools">
+              <button type="button" class="crash-link" id="s-cp-full">View full size</button>
+              <span class="crash-seg" role="group" aria-label="Preview shape">
+                <button type="button" data-cp-shape="horizontal" aria-pressed="true">16:9</button>
+                <button type="button" data-cp-shape="vertical" aria-pressed="false">9:16</button>
+              </span>
+            </span>
           </div>
           <div class="crash-preview-frame" id="s-cp-preview-frame">
             <div class="crash-preview" id="s-cp-preview" role="img" aria-label="Preview of the reconnect screen"></div>
@@ -78,6 +92,66 @@
               </span>
             </label>
           </details>
+        </div>
+      </div>
+    </section>
+    <!-- A screen instead of a jump back when a delay turns on or goes up.
+         Off by default; the rest of the card appears once it is turned on.
+         Built like the Crash protection card, whose colours it shares.
+         Saved with the tab's Save settings button. -->
+    <section class="sys-section" id="s-dt-section" data-screen="transition" data-find="delay transition screen jump back rewind replay delay builds turn on raise style theme">
+      <div class="ic-label">Delay transition</div>
+      <label class="crash-check crash-master">
+        <input type="checkbox" id="s-dt-enabled">
+        <span>
+          <span class="crash-check-title">Show a screen while the delay builds</span>
+          <span class="tab-sub">When a delay turns on or goes up, viewers see a screen instead of the last seconds again, then the stream carries on from where they were. Qualities in AV1 or 10-bit HEVC jump back as before.</span>
+        </span>
+      </label>
+      <div class="crash-body" id="s-dt-details" hidden>
+        <div class="crash-stage">
+          <div class="crash-stage-head">
+            <span class="crash-label">What viewers see</span>
+            <span class="crash-stage-tools">
+              <button type="button" class="crash-link" id="s-dt-full">View full size</button>
+              <span class="crash-seg" role="group" aria-label="Preview shape">
+                <button type="button" data-dt-shape="horizontal" aria-pressed="true">16:9</button>
+                <button type="button" data-dt-shape="vertical" aria-pressed="false">9:16</button>
+              </span>
+            </span>
+          </div>
+          <div class="crash-preview-frame" id="s-dt-preview-frame">
+            <div class="crash-preview" id="s-dt-preview" role="img" aria-label="Preview of the delay transition screen"></div>
+            <video class="crash-preview crash-preview-video" id="s-dt-preview-video" muted loop playsinline hidden aria-label="Preview of the delay transition screen"></video>
+          </div>
+          <span class="crash-note">Drawn by the same code that streams it, and it moves frame for frame as viewers see it.</span>
+        </div>
+        <div class="crash-controls">
+          <div class="crash-field">
+            <span class="crash-label">Style</span>
+            <div class="crash-themes" id="s-dt-themes" role="radiogroup" aria-label="Delay transition style"></div>
+          </div>
+          <div class="crash-field">
+            <span class="crash-label">Colours</span>
+            <span class="crash-inline">
+              <span class="crash-note">The same as Crash protection, so both screens match.</span>
+              <button type="button" class="crash-link" id="s-dt-colours">Change them</button>
+            </span>
+          </div>
+          <div class="crash-field">
+            <span class="crash-field-head">
+              <label class="crash-label" for="s-dt-headline">Text</label>
+              <button type="button" class="crash-link" id="s-dt-text-reset" hidden>Reset text</button>
+            </span>
+            <span class="crash-text-row">
+              <input id="s-dt-headline" class="ic-input" type="text" maxlength="28" aria-label="Headline">
+              <span class="crash-count mono" id="s-dt-headline-count" aria-hidden="true"></span>
+            </span>
+            <span class="crash-text-row">
+              <input id="s-dt-subline" class="ic-input" type="text" maxlength="48" aria-label="Subline">
+              <span class="crash-count mono" id="s-dt-subline-count" aria-hidden="true"></span>
+            </span>
+          </div>
         </div>
       </div>
     </section>

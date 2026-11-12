@@ -517,15 +517,21 @@ async fn serve(
 /// the dashboard can preview before Save. `orientation=vertical` flips it
 /// to 9:16; `phase` (0..1) picks the moment in the 2 s loop, or
 /// `frames=N` stacks N evenly spaced moments into one strip the dashboard
-/// animates; `size=thumb` draws the small version the theme picker shows;
-/// `format=mp4` encodes the whole loop as a video instead, the preview of
-/// the soft themes. Answers the content type with the bytes.
+/// animates; `size=thumb` draws the small version the theme picker shows,
+/// `size=full` the 1080p one the full-size view plays; `format=mp4`
+/// encodes the whole loop as a video instead, the preview of the soft
+/// themes. Answers the content type with the bytes.
 fn crash_protection_preview(
     query: &str,
     saved: &crate::crash_protection::CrashProtection,
 ) -> (&'static str, Vec<u8>) {
     const DEFAULT_PHASE: f32 = 0.25;
     const MAX_FRAMES: usize = 24;
+    // Twice the size each is shown at, so they stay sharp on high-DPI
+    // screens; full size is what a 1080p stream carries.
+    const PREVIEW: (usize, usize) = (960, 540);
+    const THUMB: (usize, usize) = (384, 216);
+    const FULL: (usize, usize) = (1920, 1080);
     let form = config::parse_form(query);
     let mut settings = saved.clone();
     for (key, value) in &form {
@@ -534,8 +540,9 @@ fn crash_protection_preview(
         }
     }
     let (long_side, short_side) = match form.get("size").map(String::as_str) {
-        Some("thumb") => (192, 108),
-        _ => (480, 270),
+        Some("thumb") => THUMB,
+        Some("full") => FULL,
+        _ => PREVIEW,
     };
     let (width, height) = if form.get("orientation").map(String::as_str) == Some("vertical") {
         (short_side, long_side)
@@ -1511,9 +1518,10 @@ fn dest_video(
     // icon show "both" only when Dual Format is actually on, rather than
     // just because the destination is Twitch.
     let track = ctrl
-        .destination_state(&dest.id)
-        .vertical_primary_track
-        .load(Ordering::Relaxed);
+        .existing_destination_state(&dest.id)
+        .map_or(0xFF, |state| {
+            state.vertical_primary_track.load(Ordering::Relaxed)
+        });
     // The sequence-header cache outlives the OBS session (it is cleared on
     // the next publish), so a canvas only counts while OBS is live.
     let vertical_canvas_present = track != 0xFF && ctrl.ingest_alive();
@@ -1613,7 +1621,8 @@ fn state_json(
             vcp = v.vertical_canvas_present,
             vres = json_escape_quoted(&v.res),
             vcod = json_escape_quoted(&v.codec),
-            oh = holding && alive && crate::crash_hold::covers(ctrl, &ctrl.destination_state(&d.id)),
+            oh = holding && alive && ctrl.existing_destination_state(&d.id)
+                .is_some_and(|state| crate::crash_hold::covers(ctrl, &state)),
             fl = dest_failure_json(ctrl, &d.id),
         )
     }).collect::<Vec<_>>().join(",");
@@ -6714,6 +6723,35 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// Reading `/state` must not register destinations: a switched-off one
+    /// would count in the header's "0/2 live" until the supervisor dropped
+    /// it, and the pill flickered between that and "Nothing yet".
+    #[test]
+    fn the_state_feed_counts_only_destinations_that_run() {
+        let (ctrl, settings, path) = refusal_harness();
+        let mut s = settings.borrow().clone();
+        s.destinations.push(crate::config::Destination {
+            id: "switched-off".into(),
+            name: "Twitch".into(),
+            enabled: false,
+            platform: "custom".into(),
+            stream_key: "KEY".into(),
+            custom_egress_url: "rtmp://host/app".into(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
+        });
+        settings.send_replace(s);
+        let json = state_json(&ctrl, &settings, &Arc::new(SysStat::new()));
+        assert!(json.contains(r#""id":"switched-off""#), "listed: {json}");
+        assert!(json.contains(r#""destinations_total":0"#), "{json}");
+        assert_eq!(ctrl.destination_alive_summary(), (0, 0));
+        let _ = std::fs::remove_file(path);
+    }
+
     /// The page and the server key an overlay the same way, or a save would
     /// never reach it (overlay-runtime.js computes this same FNV-1a 32).
     #[test]
@@ -7332,13 +7370,14 @@ mod tests {
         };
         assert_eq!(&landscape[1..4], b"PNG");
         assert_ne!(landscape, arcade, "query edits reach the render");
-        assert_eq!(size(&vertical), (270, 480));
+        assert_eq!(size(&vertical), (540, 960));
         let thumb = image("size=thumb");
-        assert_eq!(size(&thumb), (192, 108));
+        assert_eq!(size(&thumb), (384, 216));
+        assert_eq!(size(&image("size=full")), (1920, 1080));
         let strip = image("frames=24");
-        assert_eq!(size(&strip), (480, 270 * 24), "24 frames stacked");
+        assert_eq!(size(&strip), (960, 540 * 24), "24 frames stacked");
         let capped = image("frames=500&size=thumb");
-        assert_eq!(size(&capped), (192, 108 * 24));
+        assert_eq!(size(&capped), (384, 216 * 24));
         // A soft theme's video preview: an MP4, starting with its ftyp box.
         let (content_type, video) =
             crash_protection_preview("crash_protection.theme=halo&size=thumb&format=mp4", &saved);

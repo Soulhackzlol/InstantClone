@@ -1389,6 +1389,15 @@ impl Controller {
         }
     }
 
+    /// A destination's state if it has one. Read-only, for readers like
+    /// `/state` that list disabled destinations too: registering one there
+    /// counted a destination with no pump in the header's "0/2 live" until
+    /// the supervisor's next sweep dropped it, and the count flickered
+    /// between the two.
+    pub fn existing_destination_state(&self, id: &str) -> Option<Arc<DestinationState>> {
+        self.destinations.read().get(id).cloned()
+    }
+
     /// Why a destination's last attempt failed, if it did. Read-only: unlike
     /// `destination_state` it never registers a destination that has no pump.
     pub fn destination_failure(&self, id: &str) -> Option<EgressFailure> {

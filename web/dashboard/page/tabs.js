@@ -63,7 +63,7 @@ function showTab(name){
   // Run the open sub-tab's hooks (VOD callout, update check), which a
   // sub-tab restored at load hasn't had yet.
   if (name === 'system'){
-    const current = pane && pane.querySelector('.sub-tab.on');
+    const current = pane && pane.querySelector('.sub-tab.on[data-subtab]');
     showSubTab('system', current ? current.dataset.subtab : 'general');
   }
   // Last, once the pane and its hooks have drawn what they can, so the

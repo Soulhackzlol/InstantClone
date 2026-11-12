@@ -451,8 +451,8 @@ mod tests {
     }
 
     /// The dashboard plays a flat theme's loop as a strip of 24 frames
-    /// (web.rs crash_protection_preview, crash-protection.js
-    /// CP_PREVIEW_FRAMES). Every stream frame at 30 fps must be the strip
+    /// (web.rs crash_protection_preview, screen-preview.js
+    /// SCREEN_PREVIEW_FRAMES). Every stream frame at 30 fps must be the strip
     /// frame showing at that moment, so the preview moves exactly as
     /// viewers see it. Soft themes move continuously and preview otherwise.
     #[test]

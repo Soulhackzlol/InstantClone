@@ -128,6 +128,7 @@ Esc
 Escape
 Español
 Experimental
+Extras
 Finder
 Fredoka
 GB
