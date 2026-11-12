@@ -162,8 +162,8 @@ impl SlateTheme {
 }
 
 /// Two levels of 255: below what a viewer can see on a gradient, and what
-/// keeps a soft-light 1080p screen near 300 to 450 kbps in HEVC and 850 to
-/// 1350 in H.264 (measured, `slate::tests::measure_soft_loops`).
+/// keeps a soft-light 1080p screen near 370 to 500 kbps in HEVC and 1100 to
+/// 1600 in H.264 (measured, `slate::tests::measure_soft_loops`).
 const SOFT_TOLERANCE: u8 = 2;
 /// Hard-edged dots hide far bigger errors than soft light does (flat
 /// background between them stays within a level, see `slate::fidelity`),

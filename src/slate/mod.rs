@@ -468,8 +468,10 @@ mod tests {
     /// the rate a hold really uses, stays under `max_kbps`, a soft theme
     /// under twice that and one of fine moving detail under four times:
     /// light that moves everywhere costs more than a few moving shapes, and
-    /// dots and sparks more than light. Even four times stays well under
-    /// the stream the screen stands in for, whose upload it uses. The loops
+    /// dots and sparks more than light. Halftone may take five: its hard
+    /// dot edges fill every keyframe, which grows with the picture's area
+    /// faster than `max_kbps` does. Even five times stays well under the
+    /// stream the screen stands in for, whose upload it uses. The loops
     /// build side by side, each on one thread as the app builds them.
     fn assert_every_theme_fits(width: usize, height: usize, max_kbps: usize) {
         let shape = StreamShape {
@@ -525,7 +527,8 @@ mod tests {
 
     fn budget_kbps(theme: SlateTheme, max_kbps: usize) -> usize {
         match theme {
-            SlateTheme::Halftone | SlateTheme::Lattice | SlateTheme::Embers => 4 * max_kbps,
+            SlateTheme::Halftone => 5 * max_kbps,
+            SlateTheme::Lattice | SlateTheme::Embers => 4 * max_kbps,
             _ if theme.is_soft() => 2 * max_kbps,
             _ => max_kbps,
         }
