@@ -253,21 +253,24 @@ pub fn covers(ctrl: &Controller, dest: &DestinationState) -> bool {
 }
 
 /// Keep a loop of the screen `settings` describe encoded in `cache` for
-/// each of `dest`'s video tracks.
+/// each of `dest`'s video tracks. True when every one is ready already, so
+/// a caller with several screens to build can build them one at a time.
 pub fn prebuild_for(
     ctrl: &Controller,
     dest: &DestinationState,
     cache: &Arc<SlateCache>,
     settings: &CrashProtection,
-) {
+) -> bool {
     let Some(egress) = dest.video_egress() else {
-        return;
+        return true;
     };
+    let mut all_ready = true;
     for (_, header) in video_headers_for(ctrl, egress) {
         if let Some(target) = screen_target(&header) {
-            cache.prebuild(settings, target.shape, target.codec);
+            all_ready &= cache.prebuild(settings, target.shape, target.codec);
         }
     }
+    all_ready
 }
 
 /// Whether a delay transition can play for `dest`: it is on, and every
@@ -512,7 +515,8 @@ pub async fn play(
     };
     let settings = ctrl.crash_protection();
     let what = "crash protection";
-    let Some(screen) = screen_for(ctrl, dest, &ctrl.slate_cache, (&settings, what)).await else {
+    let cache = (&ctrl.slate_cache, SoftLoop::BuildIt);
+    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what)).await else {
         return Ok(ended);
     };
     ctrl.log(format!(
@@ -538,9 +542,10 @@ pub async fn play_transition(
     sink: &mut EgressSink,
     (after_ts, paused_at): (u32, u64),
 ) -> io::Result<TransitionOutcome> {
-    let settings = ctrl.transition_screen();
+    // The words name the delay being turned on, which is the target now.
+    let settings = ctrl.transition_screen(ctrl.target_delay_ms());
     let what = "the delay transition";
-    let cache = &ctrl.transition_cache;
+    let cache = (&ctrl.transition_cache, SoftLoop::LeaveIt);
     let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what)).await else {
         return Ok(TransitionOutcome {
             exit: TransitionExit::Unavailable,
@@ -578,7 +583,7 @@ struct Screen {
 async fn screen_for(
     ctrl: &Arc<Controller>,
     dest: &Arc<DestinationState>,
-    cache: &Arc<SlateCache>,
+    (cache, then): (&Arc<SlateCache>, SoftLoop),
     (settings, what): (&CrashProtection, &str),
 ) -> Option<Screen> {
     let plan = match plan_for(ctrl, dest) {
@@ -595,7 +600,9 @@ async fn screen_for(
     for source in plan.video {
         video.push(match source {
             VideoSource::Screen(target) => {
-                let built = cache.for_hold(settings, target.shape, target.codec).await;
+                let built = cache
+                    .for_hold(settings, (target.shape, target.codec), then)
+                    .await;
                 let Some(slate) = built else {
                     ctrl.log(format!("[{}] {what} couldn't build its screen", dest.id));
                     return None;
@@ -827,34 +834,86 @@ fn audio_tag(audio: &SilentAudio) -> Vec<u8> {
     tag
 }
 
-/// Encoded reconnect-screen loops, one per destination shape and codec,
-/// rebuilt when the screen's look changes. Encoding a 1080p loop takes a
+/// Encoded screen loops, one per destination shape, codec and set of
+/// words, rebuilt when the screen's look changes. Encoding a 1080p loop takes a
 /// few hundred ms of one core, so loops are built ahead of time while OBS
 /// is live and a hold usually starts with one ready.
 #[derive(Default)]
 pub struct SlateCache {
-    /// Per (width, height, codec, theme): the loop and the settings it was
-    /// built with.
-    ready: crate::sync::Mutex<HashMap<SlateKey, (CrashProtection, Arc<SlateLoop>)>>,
+    ready: crate::sync::Mutex<HashMap<SlateKey, Ready>>,
     building: crate::sync::Mutex<HashSet<SlateKey>>,
+    /// Counts every ask, to tell which loop has gone unasked longest.
+    asks: std::sync::atomic::AtomicU64,
 }
 
-/// A slate loop's (width, height, codec, theme). The theme is part of it
-/// so a soft theme's stand-in and the soft loop itself can be built side
-/// by side.
-type SlateKey = (usize, usize, SlateCodec, SlateTheme);
+/// A loop built, with the settings it was built with and the ask it was
+/// last wanted at.
+struct Ready {
+    settings: CrashProtection,
+    slate: Arc<SlateLoop>,
+    last_asked: u64,
+}
+
+/// Loops kept per cache: the delay transition keeps one per likely delay
+/// (`Controller::transition_delays`) and destination track, so this stays
+/// well above what the app builds ahead. Past it, the loop unasked for
+/// longest goes: one drawn with words edited since, or for a delay turned
+/// on once.
+const MOST_LOOPS: usize = 64;
+
+/// What tells loops apart: the shape, the codec, the theme (so a soft
+/// theme's stand-in and the soft loop itself can be built side by side)
+/// and the words (so a delay transition keeps a loop per delay it names).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SlateKey {
+    width: usize,
+    height: usize,
+    codec: SlateCodec,
+    theme: SlateTheme,
+    words: (String, String),
+}
 
 fn slate_key(settings: &CrashProtection, shape: StreamShape, codec: SlateCodec) -> SlateKey {
-    (shape.width, shape.height, codec, settings.theme)
+    SlateKey {
+        width: shape.width,
+        height: shape.height,
+        codec,
+        theme: settings.theme,
+        words: (settings.headline.clone(), settings.subline.clone()),
+    }
 }
 
 impl SlateCache {
-    fn cached(&self, settings: &CrashProtection, key: SlateKey) -> Option<Arc<SlateLoop>> {
-        self.ready
-            .lock()
-            .get(&key)
-            .filter(|(built_with, _)| built_with.same_screen(settings))
-            .map(|(_, slate)| slate.clone())
+    fn cached(&self, settings: &CrashProtection, key: &SlateKey) -> Option<Arc<SlateLoop>> {
+        let ask = self.asks.fetch_add(1, Ordering::Relaxed);
+        let mut ready = self.ready.lock();
+        let entry = ready
+            .get_mut(key)
+            .filter(|entry| entry.settings.same_screen(settings))?;
+        entry.last_asked = ask;
+        Some(entry.slate.clone())
+    }
+
+    fn keep(&self, key: SlateKey, settings: CrashProtection, slate: Arc<SlateLoop>) {
+        let last_asked = self.asks.fetch_add(1, Ordering::Relaxed);
+        let mut ready = self.ready.lock();
+        if ready.len() >= MOST_LOOPS && !ready.contains_key(&key) {
+            let unasked_longest = ready
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_asked)
+                .map(|(key, _)| key.clone());
+            if let Some(gone) = unasked_longest {
+                ready.remove(&gone);
+            }
+        }
+        ready.insert(
+            key,
+            Ready {
+                settings,
+                slate,
+                last_asked,
+            },
+        );
     }
 
     /// The loop for `shape` in `codec`, building it now if it isn't
@@ -881,10 +940,10 @@ impl SlateCache {
         const BUILD_POLL: Duration = Duration::from_millis(50);
         let key = slate_key(settings, shape, codec);
         loop {
-            if let Some(slate) = self.cached(settings, key) {
+            if let Some(slate) = self.cached(settings, &key) {
                 return Some(slate);
             }
-            if self.building.lock().insert(key) {
+            if self.building.lock().insert(key.clone()) {
                 break;
             }
             tokio::time::sleep(BUILD_POLL).await;
@@ -897,7 +956,7 @@ impl SlateCache {
         let task = tokio::spawn(async move {
             let slate = build(settings.clone(), shape, codec, urgency).await;
             if let Some(slate) = &slate {
-                cache.ready.lock().insert(key, (settings, slate.clone()));
+                cache.keep(key.clone(), settings, slate.clone());
             }
             cache.building.lock().remove(&key);
             slate
@@ -907,21 +966,26 @@ impl SlateCache {
 
     /// The loop a hold plays now. A soft theme takes a few seconds to
     /// build, so until it is ready the hold plays its flat stand-in, in the
-    /// same colours and words and built in a fraction of a second, and the
-    /// soft loop goes on building for the next hold.
+    /// same colours and words and built in a fraction of a second. With
+    /// `then` at `BuildIt`, the soft loop goes on building for the next
+    /// hold; a delay transition leaves that to the supervisor, which
+    /// builds the delays likely to come (an unplanned one may never come
+    /// again).
     pub async fn for_hold(
         self: &Arc<Self>,
         settings: &CrashProtection,
-        shape: StreamShape,
-        codec: SlateCodec,
+        (shape, codec): (StreamShape, SlateCodec),
+        then: SoftLoop,
     ) -> Option<Arc<SlateLoop>> {
         let Some(stand_in) = settings.theme.quick_stand_in() else {
             return self.get(settings, shape, codec).await;
         };
-        if let Some(slate) = self.cached(settings, slate_key(settings, shape, codec)) {
+        if let Some(slate) = self.cached(settings, &slate_key(settings, shape, codec)) {
             return Some(slate);
         }
-        self.prebuild(settings, shape, codec);
+        if then == SoftLoop::BuildIt {
+            self.prebuild(settings, shape, codec);
+        }
         let quick = CrashProtection {
             theme: stand_in,
             ..settings.clone()
@@ -932,16 +996,20 @@ impl SlateCache {
     /// Start building the loop for `shape` in `codec` in the background,
     /// unless it is ready or already being built. A soft theme's loop
     /// builds quietly: nothing waits on it (a hold plays its stand-in
-    /// meanwhile), and the streamer is usually live while it builds.
+    /// meanwhile), and the streamer is usually live while it builds. True
+    /// when it is ready.
     pub fn prebuild(
         self: &Arc<Self>,
         settings: &CrashProtection,
         shape: StreamShape,
         codec: SlateCodec,
-    ) {
+    ) -> bool {
         let key = slate_key(settings, shape, codec);
-        if self.cached(settings, key).is_some() || self.building.lock().contains(&key) {
-            return;
+        if self.cached(settings, &key).is_some() {
+            return true;
+        }
+        if self.building.lock().contains(&key) {
+            return false;
         }
         let urgency = if settings.theme.is_soft() {
             Urgency::Quietly
@@ -953,12 +1021,21 @@ impl SlateCache {
         tokio::spawn(async move {
             cache.get_or_build(&settings, shape, codec, urgency).await;
         });
+        false
     }
 
     /// Drop every loop (crash protection was switched off).
     pub fn clear(&self) {
         self.ready.lock().clear();
     }
+}
+
+/// Whether a hold playing a soft theme's stand-in also builds the soft
+/// loop itself, for next time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoftLoop {
+    BuildIt,
+    LeaveIt,
 }
 
 /// How soon a loop is needed.
@@ -1210,16 +1287,96 @@ mod tests {
             height: 180,
             fps: SLATE_FPS,
         };
-        let first = cache.for_hold(&settings, shape, SlateCodec::Hevc).await;
+        let target = (shape, SlateCodec::Hevc);
+        let first = cache.for_hold(&settings, target, SoftLoop::BuildIt).await;
         assert_eq!(first.expect("a loop to play").intervals.len(), 1);
         let soft = tokio::time::timeout(
             Duration::from_secs(30),
             cache.get(&settings, shape, SlateCodec::Hevc),
         );
         assert!(soft.await.expect("the soft build finishes").is_some());
-        let next = cache.for_hold(&settings, shape, SlateCodec::Hevc).await;
+        let next = cache.for_hold(&settings, target, SoftLoop::BuildIt).await;
         let intervals = SlateTheme::Halo.loop_intervals();
         assert_eq!(next.expect("a loop to play").intervals.len(), intervals);
+    }
+
+    /// A delay transition to a delay nobody planned for plays the stand-in
+    /// and builds nothing more: the supervisor builds the likely delays.
+    #[tokio::test]
+    async fn a_transition_leaves_the_soft_loop_to_the_supervisor() {
+        let cache = Arc::new(SlateCache::default());
+        let settings = CrashProtection {
+            theme: SlateTheme::Halo,
+            ..CrashProtection::default()
+        };
+        let shape = StreamShape {
+            width: 320,
+            height: 180,
+            fps: SLATE_FPS,
+        };
+        let played = cache
+            .for_hold(&settings, (shape, SlateCodec::H264), SoftLoop::LeaveIt)
+            .await;
+        assert_eq!(played.expect("a loop to play").intervals.len(), 1);
+        assert!(cache.building.lock().is_empty(), "no soft build started");
+        let soft_key = slate_key(&settings, shape, SlateCodec::H264);
+        assert!(cache.cached(&settings, &soft_key).is_none());
+    }
+
+    /// Each set of words keeps its own loop, so a screen per delay can be
+    /// ready at once; past `MOST_LOOPS` the one unasked for longest goes.
+    #[tokio::test]
+    async fn loops_are_kept_per_words_and_the_unasked_go_first() {
+        let cache = Arc::new(SlateCache::default());
+        let shape = StreamShape {
+            width: 64,
+            height: 64,
+            fps: SLATE_FPS,
+        };
+        let worded = |headline: String| CrashProtection {
+            theme: SlateTheme::Whisper,
+            headline,
+            ..CrashProtection::default()
+        };
+        let slate = cache
+            .get(
+                &worded("Loading a 30 s delay".into()),
+                shape,
+                SlateCodec::H264,
+            )
+            .await
+            .expect("a loop");
+        cache
+            .get(
+                &worded("Loading a 1 min delay".into()),
+                shape,
+                SlateCodec::H264,
+            )
+            .await
+            .expect("a loop");
+        let first = worded("Loading a 30 s delay".into());
+        let first_key = slate_key(&first, shape, SlateCodec::H264);
+        assert!(cache.cached(&first, &first_key).is_some(), "both kept");
+        // Fill the cache, asking for the first loop all along.
+        for n in 0..MOST_LOOPS {
+            let settings = worded(format!("Delay {n}"));
+            cache.keep(
+                slate_key(&settings, shape, SlateCodec::H264),
+                settings,
+                slate.clone(),
+            );
+            assert!(
+                cache.cached(&first, &first_key).is_some(),
+                "asked for: kept"
+            );
+        }
+        assert_eq!(cache.ready.lock().len(), MOST_LOOPS);
+        let second = worded("Loading a 1 min delay".into());
+        let second_key = slate_key(&second, shape, SlateCodec::H264);
+        assert!(
+            cache.cached(&second, &second_key).is_none(),
+            "unasked: gone"
+        );
     }
 
     /// OBS is back, but its new video comes in too slowly to span the

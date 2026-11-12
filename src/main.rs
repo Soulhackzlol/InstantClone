@@ -1199,13 +1199,19 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 crash_hold::prebuild_for(&ctrl, &dest, &ctrl.slate_cache, &crash_settings);
             }
         }
-        // Likewise the delay transition's screen, so a delay turned on
-        // plays it at once.
+        // Likewise the delay transition's screens, so a delay turned on
+        // plays its own at once: one per delay likely to be turned on when
+        // its words name it, the likeliest first and one at a time.
         if ingest_alive && transition_settings.enabled {
-            let screen = ctrl.transition_screen();
+            let delays = ctrl.transition_delays(&rx.borrow().profiles);
             for id in running.keys() {
                 let dest = ctrl.destination_state(id);
-                crash_hold::prebuild_for(&ctrl, &dest, &ctrl.transition_cache, &screen);
+                for delay_ms in &delays {
+                    let screen = ctrl.transition_screen(*delay_ms);
+                    if !crash_hold::prebuild_for(&ctrl, &dest, &ctrl.transition_cache, &screen) {
+                        break;
+                    }
+                }
             }
         }
 

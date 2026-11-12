@@ -17,6 +17,7 @@ function dtFields(){
   };
 }
 // What the screen looks like, in the preview's crash_protection.* fields.
+// {delay} in the words shows as the armed delay, the one turned on next.
 function dtLook(){
   return {
     'crash_protection.theme': dtState.theme,
@@ -24,8 +25,11 @@ function dtLook(){
     'crash_protection.background': cpState.background,
     'crash_protection.headline': $('s-dt-headline').value,
     'crash_protection.subline': $('s-dt-subline').value,
+    delay: String((lastState && lastState.armed_delay_ms) || DT_EXAMPLE_DELAY_MS),
   };
 }
+// The delay {delay} shows as before any is armed.
+const DT_EXAMPLE_DELAY_MS = 30000;
 function dtRender(){
   $('s-dt-details').hidden = !$('s-dt-enabled').checked;
   screenMarkTheme($('s-dt-themes'), dtState.theme);

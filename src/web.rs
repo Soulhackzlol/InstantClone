@@ -539,6 +539,15 @@ fn crash_protection_preview(
             settings.set(field, value);
         }
     }
+    // The delay transition's words, written out for an example delay as
+    // the stream will write out the one turned on.
+    if let Some(delay_ms) = form
+        .get("delay")
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        settings.headline = crate::delay_transition::with_delay(&settings.headline, delay_ms);
+        settings.subline = crate::delay_transition::with_delay(&settings.subline, delay_ms);
+    }
     let (long_side, short_side) = match form.get("size").map(String::as_str) {
         Some("thumb") => THUMB,
         Some("full") => FULL,
@@ -7090,7 +7099,7 @@ mod tests {
                 key: "delay_transition.headline",
                 set: "Be right back",
                 reads_as: "Be right back",
-                reset: "Back in a moment",
+                reset: "Loading a {delay} delay",
                 read: |s| s.delay_transition.headline.clone(),
             },
             SettableRow {
@@ -7383,7 +7392,12 @@ mod tests {
             crash_protection_preview("crash_protection.theme=halo&size=thumb&format=mp4", &saved);
         assert_eq!(content_type, "video/mp4");
         assert_eq!(&video[4..8], b"ftyp");
-        for preview_only in ["orientation", "size", "phase", "frames", "format"] {
+        // The delay transition's words name an example delay.
+        let named =
+            image("crash_protection.headline=Loading%20a%20%7Bdelay%7D%20delay&delay=60000");
+        let written = image("crash_protection.headline=Loading%20a%201%20min%20delay");
+        assert_eq!(named, written, "{{delay}} written out");
+        for preview_only in ["orientation", "size", "phase", "frames", "format", "delay"] {
             assert!(
                 !is_settable_key(preview_only),
                 "preview-only params never persist"

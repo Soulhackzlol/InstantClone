@@ -5,7 +5,8 @@
 //! destination plays a screen instead, until the delay has built up behind
 //! it, then picks up exactly where viewers left off: nothing replayed,
 //! nothing missed. The screen has its own style and words, in the
-//! crash-protection screen's colours. Destinations whose video the screens
+//! crash-protection screen's colours, and its words can name the delay
+//! being turned on (`DELAY_TOKEN`). Destinations whose video the screens
 //! can't stand in for (AV1, 10-bit HEVC) jump as before.
 //!
 //! This file owns the `delay_transition.*` config keys; the screen is
@@ -16,7 +17,10 @@ use std::io::{self, Write};
 
 /// Config and form keys share this prefix, like `crash_protection.`.
 pub const KEY_PREFIX: &str = "delay_transition.";
-const HEADLINE_DEFAULT: &str = "Back in a moment";
+/// Stands for the delay being turned on, in the screen's words: "30 s",
+/// "1 min 30 s".
+pub const DELAY_TOKEN: &str = "{delay}";
+const HEADLINE_DEFAULT: &str = "Loading a {delay} delay";
 const SUBLINE_DEFAULT: &str = "The stream picks up right where it left off";
 const THEME_DEFAULT: SlateTheme = SlateTheme::Halo;
 
@@ -62,16 +66,22 @@ impl DelayTransition {
         }
     }
 
-    /// The screen a transition plays: its own style and words in the
-    /// reconnect screen's colours (a background the streamer left on the
-    /// default follows the transition's style).
-    pub fn screen(&self, look: &CrashProtection) -> CrashProtection {
+    /// The screen a transition to a delay of `delay_ms` plays: its own
+    /// style and words in the reconnect screen's colours (a background the
+    /// streamer left on the default follows the transition's style).
+    pub fn screen(&self, look: &CrashProtection, delay_ms: u32) -> CrashProtection {
         CrashProtection {
             theme: self.theme,
-            headline: self.headline.clone(),
-            subline: self.subline.clone(),
+            headline: with_delay(&self.headline, delay_ms),
+            subline: with_delay(&self.subline, delay_ms),
             ..look.clone()
         }
+    }
+
+    /// Whether the words name the delay, so each delay draws its own
+    /// screen.
+    pub fn names_the_delay(&self) -> bool {
+        self.headline.contains(DELAY_TOKEN) || self.subline.contains(DELAY_TOKEN)
     }
 
     /// Config lines for every setting that differs from its default.
@@ -107,6 +117,26 @@ impl DelayTransition {
             ("headline", self.headline.clone()),
             ("subline", self.subline.clone()),
         ]
+    }
+}
+
+/// `text` with `DELAY_TOKEN` written out as `delay_ms`.
+pub fn with_delay(text: &str, delay_ms: u32) -> String {
+    if text.contains(DELAY_TOKEN) {
+        text.replace(DELAY_TOKEN, &delay_words(delay_ms))
+    } else {
+        text.to_string()
+    }
+}
+
+/// A delay as viewers read it: "45 s", "1 min", "1 min 30 s". Whole
+/// seconds, never less than one.
+pub fn delay_words(delay_ms: u32) -> String {
+    let secs = ((delay_ms + 500) / 1000).max(1);
+    match (secs / 60, secs % 60) {
+        (0, secs) => format!("{secs} s"),
+        (mins, 0) => format!("{mins} min"),
+        (mins, secs) => format!("{mins} min {secs} s"),
     }
 }
 
@@ -152,7 +182,7 @@ mod tests {
             theme: SlateTheme::Embers,
             ..DelayTransition::default()
         };
-        let screen = transition.screen(&look);
+        let screen = transition.screen(&look, 30_000);
         assert_eq!(screen.theme, SlateTheme::Embers);
         assert_eq!(screen.accent, look.accent);
         assert_eq!(
@@ -160,7 +190,31 @@ mod tests {
             SlateTheme::Embers.default_background(),
             "a default background follows the transition's style"
         );
-        assert_eq!(screen.headline, HEADLINE_DEFAULT);
+        assert_eq!(screen.headline, "Loading a 30 s delay");
         assert_eq!(screen.subline, SUBLINE_DEFAULT);
+    }
+
+    #[test]
+    fn the_words_name_the_delay_being_turned_on() {
+        for (delay_ms, words) in [
+            (0, "1 s"),
+            (2_400, "2 s"),
+            (2_500, "3 s"),
+            (45_000, "45 s"),
+            (60_000, "1 min"),
+            (90_000, "1 min 30 s"),
+            (3_600_000, "60 min"),
+        ] {
+            assert_eq!(delay_words(delay_ms), words);
+        }
+        let mut transition = DelayTransition::default();
+        assert!(transition.names_the_delay());
+        transition.set("headline", "Going {delay} back, {delay}!");
+        transition.set("subline", "Hold on");
+        let screen = transition.screen(&CrashProtection::default(), 300_000);
+        assert_eq!(screen.headline, "Going 5 min back, 5 min!");
+        assert_eq!(screen.subline, "Hold on");
+        transition.set("headline", "Back soon");
+        assert!(!transition.names_the_delay());
     }
 }

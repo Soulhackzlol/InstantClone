@@ -2689,10 +2689,33 @@ impl Controller {
         self.delay_transition.lock().clone()
     }
 
-    /// The screen a delay transition plays: the reconnect screen's look
-    /// with the transition's words.
-    pub fn transition_screen(&self) -> crate::crash_protection::CrashProtection {
-        self.delay_transition().screen(&self.crash_protection())
+    /// The screen a delay transition to `delay_ms` plays: the reconnect
+    /// screen's look with the transition's words.
+    pub fn transition_screen(&self, delay_ms: u32) -> crate::crash_protection::CrashProtection {
+        self.delay_transition()
+            .screen(&self.crash_protection(), delay_ms)
+    }
+
+    /// The delays worth having a transition screen built for ahead of
+    /// time, the likeliest first: the armed one, then each profile's (a
+    /// press away). Just one when the screen's words don't name the delay,
+    /// as every delay then draws the same screen.
+    pub fn transition_delays(&self, profiles: &[crate::config::DelayProfile]) -> Vec<u32> {
+        /// Each is a loop encoded in the background on one core while
+        /// live: a handful covers the profiles a streamer keeps.
+        const MOST: usize = 6;
+        let armed = self.armed_delay_ms();
+        if !self.delay_transition().names_the_delay() {
+            return vec![armed];
+        }
+        let mut delays: Vec<u32> = Vec::with_capacity(MOST);
+        let likely = std::iter::once(armed).chain(profiles.iter().map(|profile| profile.delay_ms));
+        for delay_ms in likely.filter(|delay_ms| *delay_ms > 0) {
+            if delays.len() < MOST && !delays.contains(&delay_ms) {
+                delays.push(delay_ms);
+            }
+        }
+        delays
     }
 
     /// Whether destinations are being held on the reconnect screen now.
@@ -4944,6 +4967,35 @@ mod tests {
         let ring = Arc::new(DiskRing::create(&path, 4 * 1024 * 1024).expect("ring create"));
         let ctrl = Arc::new(Controller::new(ring, initial_armed_ms));
         Harness { ctrl, path }
+    }
+
+    /// The transition screens built ahead: the armed delay first, then each
+    /// profile's once, none of zero, at most six; one when the words don't
+    /// name the delay.
+    #[test]
+    fn transition_screens_are_built_ahead_for_the_likely_delays() {
+        let h = harness(30_000);
+        let profile = |delay_ms| crate::config::DelayProfile {
+            name: String::new(),
+            delay_ms,
+        };
+        let profiles: Vec<_> = [15_000, 30_000, 0, 60_000, 5_000, 120_000, 240_000, 480_000]
+            .into_iter()
+            .map(profile)
+            .collect();
+        h.ctrl
+            .update_delay_transition(crate::delay_transition::DelayTransition {
+                enabled: true,
+                ..Default::default()
+            });
+        assert_eq!(
+            h.ctrl.transition_delays(&profiles),
+            [30_000, 15_000, 60_000, 5_000, 120_000, 240_000]
+        );
+        let mut plain = crate::delay_transition::DelayTransition::default();
+        plain.set("headline", "Back in a moment");
+        h.ctrl.update_delay_transition(plain);
+        assert_eq!(h.ctrl.transition_delays(&profiles), [30_000]);
     }
 
     /// Push N seconds of fake tags into the ring at `fps`. Each IDR is at
