@@ -6,7 +6,7 @@ let cpState = {theme:'whisper', accent:'#5ac8fa', background:'', shape:'horizont
 let cpThemes = [];
 let cpDefaults = {headline:'', subline:''};
 let cpRefreshTimer = null;
-const cpPreview = screenPreview({frame:'s-cp-preview-frame', strip:'s-cp-preview', video:'s-cp-preview-video'});
+const cpPreview = screenPreview({frame:'s-cp-preview-frame', video:'s-cp-preview-video'});
 
 function cpInit(){
   const custom = $('s-cp-accent').parentElement;
@@ -99,8 +99,7 @@ function cpRefresh(){
   if ($('s-cp-details').hidden || !screensShown('crash')) { cpPreview.pause(); return; }
   const look = cpLook();
   screenDrawThumbs($('s-cp-themes'), look);
-  const theme = cpThemes.find(t => t.id === cpState.theme);
-  cpPreview.refresh(look, cpState.shape, !!(theme && theme.soft));
+  cpPreview.refresh(look, cpState.shape);
 }
 function cpApplyConfig(cp){
   if (!cp) return;

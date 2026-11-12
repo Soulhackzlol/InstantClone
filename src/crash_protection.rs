@@ -121,8 +121,10 @@ impl SlateTheme {
     }
 
     /// Whether the theme paints soft light, fine detail or both (glows,
-    /// dots, sparks) moving all through the loop. Those are encoded within
-    /// `SOFT_TOLERANCE` of the render, the flat ones exactly.
+    /// dots, sparks) moving all through the loop: those loop over several
+    /// keyframe intervals and take seconds to build. The others move a few
+    /// shapes over flat colour, loop in one interval and build in a
+    /// fraction of a second.
     pub fn is_soft(self) -> bool {
         !matches!(
             self,
@@ -134,13 +136,14 @@ impl SlateTheme {
         )
     }
 
-    /// How far a decoded sample may sit from the render (of 255).
+    /// How far a decoded sample may sit from the render (of 255). Every
+    /// theme moves smoothly, so every one has some: coded exactly, each
+    /// frame of a glow fading would redraw its blocks in full.
     pub fn tolerance(self) -> u8 {
         match self {
             SlateTheme::Halftone => HALFTONE_TOLERANCE,
             SlateTheme::Lattice => LATTICE_TOLERANCE,
-            _ if self.is_soft() => SOFT_TOLERANCE,
-            _ => 0,
+            _ => SOFT_TOLERANCE,
         }
     }
 
@@ -163,7 +166,7 @@ impl SlateTheme {
 
 /// Two levels of 255: below what a viewer can see on a gradient, and what
 /// keeps a soft-light 1080p screen near 370 to 500 kbps in HEVC and 1100 to
-/// 1600 in H.264 (measured, `slate::tests::measure_soft_loops`).
+/// 1600 in H.264 (measured, `slate::tests::measure_loops`).
 const SOFT_TOLERANCE: u8 = 2;
 /// Hard-edged dots hide far bigger errors than soft light does (flat
 /// background between them stays within a level, see `slate::fidelity`),
@@ -279,11 +282,10 @@ impl CrashProtection {
             .iter()
             .map(|theme| {
                 format!(
-                    r#"{{"id":{},"name":{},"background":{},"soft":{}}}"#,
+                    r#"{{"id":{},"name":{},"background":{}}}"#,
                     crate::config::json_str(theme.id()),
                     crate::config::json_str(theme.name()),
                     crate::config::json_str(&theme.default_background().to_hex()),
-                    theme.is_soft(),
                 )
             })
             .collect();

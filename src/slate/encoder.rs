@@ -1,13 +1,17 @@
 //! H.264 encoder for the screens InstantClone draws itself.
 //!
-//! It needs four macroblock types, which is what keeps it small:
+//! It needs five macroblock types, which is what keeps it small:
 //! - I_16x16 with no residual: the block is a vertical, horizontal, DC or
 //!   plane prediction from its neighbours (flat areas, even ramps).
 //! - I_16x16 with residual: a prediction plus transform coefficients, for
 //!   soft detail (gradients, glows). Only screens that allow a tolerance
 //!   use it.
 //! - I_PCM: the 384 raw samples, for anything else.
-//! - P_Skip: close enough to the previous frame already.
+//! - P_L0_16x16: a block of the previous picture, moved or not, plus a
+//!   residual (`inter`): a dot grown to the size of its neighbour, a spark
+//!   a few pixels higher, light a level brighter.
+//! - P_Skip: the previous picture already has it, where the motion of the
+//!   blocks around says to look.
 //!
 //! A screen coded with tolerance 0 is lossless: every macroblock
 //! reconstructs to exactly its source samples. With a tolerance, every
@@ -188,12 +192,39 @@ pub fn encode_idr(frame: &YuvFrame, idr_pic_id: u32) -> Vec<u8> {
 }
 
 /// IDR picture whose every sample lands within `tolerance` of `frame`.
+#[cfg(test)]
 pub fn encode_idr_within(frame: &YuvFrame, idr_pic_id: u32, tolerance: u8) -> Coded {
+    let (rbsp, _, shown) = idr_rbsp(frame, idr_pic_id, tolerance);
+    Coded {
+        nal: bitstream::nal_unit(3, bitstream::NAL_IDR_SLICE, &rbsp),
+        shown,
+    }
+}
+
+/// The two IDR pictures a loop alternates between (back-to-back IDRs
+/// must differ in idr_pic_id), and what a decoder shows for either, every
+/// sample within `tolerance` of `frame`. Ids 1 and 2 code in the same
+/// three bits (ue(v) 010 and 011), so the picture is coded once and the
+/// second copy differs from the first in that last bit alone.
+pub fn encode_idr_pair(frame: &YuvFrame, tolerance: u8) -> ([Vec<u8>; 2], YuvFrame) {
+    const IDS: [u32; 2] = [1, 2];
+    let (first, id_at, shown) = idr_rbsp(frame, IDS[0], tolerance);
+    let mut second = first.clone();
+    let last_bit = id_at + 2;
+    second[last_bit / 8] |= 0x80 >> (last_bit % 8);
+    let nal = |rbsp: &[u8]| bitstream::nal_unit(3, bitstream::NAL_IDR_SLICE, rbsp);
+    ([nal(&first), nal(&second)], shown)
+}
+
+/// An IDR picture's RBSP, the bit idr_pic_id starts at, and the picture a
+/// decoder shows.
+fn idr_rbsp(frame: &YuvFrame, idr_pic_id: u32, tolerance: u8) -> (Vec<u8>, usize, YuvFrame) {
     let mut w = BitWriter::new();
     w.ue(0); // first_mb_in_slice
     w.ue(SLICE_TYPE_I);
     w.ue(PPS_ID);
     w.bits(0, LOG2_MAX_FRAME_NUM); // frame_num
+    let id_at = w.bit_len();
     w.ue(idr_pic_id);
     w.bit(false); // no_output_of_prior_pics_flag
     w.bit(false); // long_term_reference_flag
@@ -202,10 +233,7 @@ pub fn encode_idr_within(frame: &YuvFrame, idr_pic_id: u32, tolerance: u8) -> Co
     for index in 0..coder.mb_count() {
         coder.code_intra(&mut w, index, 0);
     }
-    Coded {
-        nal: bitstream::nal_unit(3, bitstream::NAL_IDR_SLICE, &w.finish()),
-        shown: coder.shown,
-    }
+    (w.finish(), id_at, coder.shown)
 }
 
 /// P picture, exact: blocks identical to `previous` are skipped, the rest
@@ -238,7 +266,7 @@ pub fn encode_p_within(
     let mut coder = PictureCoder::new(frame, Some(shown_before), tolerance);
     let mut skip_run = 0;
     for index in 0..coder.mb_count() {
-        if coder.is_already_shown(index) {
+        if coder.try_skip(index) {
             skip_run += 1;
             continue;
         }
@@ -320,6 +348,12 @@ struct PictureCoder<'a> {
     source: &'a YuvFrame,
     /// The decoder's picture: the one before, until a block is coded.
     shown: YuvFrame,
+    /// The picture before, which a P picture's blocks are moved from.
+    /// `None` in an IDR.
+    reference: Option<&'a YuvFrame>,
+    /// How each macroblock coded so far was predicted: `None` for intra,
+    /// else its motion. Later blocks' motion is coded against it.
+    motions: Vec<Option<inter::Motion>>,
     width_mbs: usize,
     tolerance: i32,
     /// QP of the last macroblock that set one; mb_qp_delta is against it.
@@ -334,12 +368,14 @@ struct PictureCoder<'a> {
 }
 
 impl<'a> PictureCoder<'a> {
-    fn new(source: &'a YuvFrame, shown_before: Option<&YuvFrame>, tolerance: u8) -> Self {
+    fn new(source: &'a YuvFrame, shown_before: Option<&'a YuvFrame>, tolerance: u8) -> Self {
         let width_mbs = source.width / MB;
         let mb_count = width_mbs * (source.height / MB);
         Self {
             source,
             shown: shown_before.unwrap_or(source).clone(),
+            reference: shown_before,
+            motions: vec![None; mb_count],
             width_mbs,
             tolerance: i32::from(tolerance),
             qp: SLICE_QP,
@@ -360,20 +396,30 @@ impl<'a> PictureCoder<'a> {
         }
     }
 
-    /// Whether the decoder's picture already has this macroblock within
-    /// the tolerance, so a P picture can skip it.
-    fn is_already_shown(&self, index: usize) -> bool {
+    /// Skip macroblock `index` of a P picture when the block a decoder
+    /// takes for a skipped one (moved as `skip_motion` says) is within the
+    /// tolerance of the source already. Answers whether it was skipped.
+    fn try_skip(&mut self, index: usize) -> bool {
         let position = self.position(index);
-        let shown = macroblock_of(&self.shown, position);
+        let motion = self.skip_motion(position);
+        let Some(moved) = self.moved_block(position, motion) else {
+            return false;
+        };
         let source = macroblock_of(self.source, position);
-        is_within(&source.0, &shown.0, self.tolerance)
-            && is_within(&source.1[0], &shown.1[0], self.tolerance)
-            && is_within(&source.1[1], &shown.1[1], self.tolerance)
+        let is_close = is_within(&source.0, &moved.0, self.tolerance)
+            && is_within(&source.1[0], &moved.1[0], self.tolerance)
+            && is_within(&source.1[1], &moved.1[1], self.tolerance);
+        if is_close {
+            self.motions[index] = Some(motion);
+            self.store(position, &moved.0, &moved.1);
+        }
+        is_close
     }
 
     /// Code macroblock `index` as intra: a plain prediction when one is
     /// close enough, else a prediction plus residual, else raw samples.
     fn code_intra(&mut self, w: &mut BitWriter, index: usize, type_offset: u32) {
+        self.motions[index] = None;
         let position = self.position(index);
         let (luma_source, chroma_source) = macroblock_of(self.source, position);
         let luma = pick_luma(
@@ -1000,6 +1046,17 @@ mod tests {
             assert_eq!((slice_type, frame_num), (2, 0), "I slice, frame_num 0");
             assert_eq!(header.ue(), idr_pic_id);
         }
+        // A loop's pair: ids 1 and 2, the same picture otherwise.
+        let ([first, second], _) = encode_idr_pair(&frame, 2);
+        for (idr, expected_id) in [(&first, 1), (&second, 2)] {
+            let (mut header, ..) = read_slice_header(idr, frame_num_bits);
+            assert_eq!(header.ue(), expected_id);
+        }
+        let differing: Vec<usize> = (0..first.len())
+            .filter(|at| first[*at] != second[*at])
+            .collect();
+        assert_eq!(first.len(), second.len());
+        assert_eq!(differing.len(), 1, "one byte apart");
         let max_frame_num = 1 << frame_num_bits;
         for index in [1, max_frame_num - 1, max_frame_num, max_frame_num + 223] {
             let p = encode_p(&frame, &frame, index);

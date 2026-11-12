@@ -75,7 +75,7 @@ fn is_within_half_a_level(total_error: i32, count: usize) -> bool {
 /// the bits on soft light; at a level the streaks were gone from the
 /// frames looked at, and on Halftone two cost a third of what one does,
 /// with only faint colour left by the text (measured,
-/// `slate::tests::measure_soft_loops`).
+/// `slate::tests::measure_loops`).
 fn line_tolerance(sample_tolerance: i32) -> i32 {
     (sample_tolerance / 4).max(1)
 }

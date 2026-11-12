@@ -1,8 +1,7 @@
-/* Crash protection card. The preview is drawn server-side by the same
-   renderer that encodes the stream, so it is what viewers will see, frame
-   for frame (slate/themes.rs tests the 24-frame strip against 30 fps). Wide
-   screens put the preview beside the controls and keep it in view while
-   they scroll; narrow ones stack them. */
+/* Crash protection card. The preview is the loop drawn and encoded
+   server-side by the code that streams it, so it is what viewers will
+   see, frame for frame. Wide screens put the preview beside the controls
+   and keep it in view while they scroll; narrow ones stack them. */
 .crash-check{display:flex;align-items:flex-start;gap:10px;cursor:pointer}
 .crash-check input{width:16px;height:16px;margin-top:2px;flex:none;cursor:pointer;accent-color:var(--accent)}
 .crash-check>span{display:flex;flex-direction:column;gap:2px;min-width:0}
@@ -18,17 +17,8 @@
 .crash-preview-frame{display:grid;place-items:center;background:var(--bg);border:1px solid var(--line);
   border-radius:10px;padding:10px;aspect-ratio:16/10}
 .crash-preview{display:block;width:100%;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45);aspect-ratio:16/9;
-  background:var(--surface) no-repeat 0 0/100% 2400%;animation:crash-loop 2s steps(24,jump-none) infinite}
+  background:var(--surface);object-fit:cover}
 .crash-preview-frame.vertical .crash-preview{width:auto;height:100%;aspect-ratio:9/16}
-/* Soft styles move smoothly, so they preview as a looping video of the
-   stream's own encode instead of a strip of stills. */
-.crash-preview-video{background:var(--surface);object-fit:cover;animation:none}
-.crash-preview[hidden]{display:none}
-/* The preview is one strip of 24 frames (SCREEN_PREVIEW_FRAMES) stacked top to
-   bottom; sliding it a frame at a time plays the 2 s loop with no script. */
-@keyframes crash-loop{to{background-position:0 100%}}
-/* Scrolled out of view, the preview rests (screen-preview.js). */
-.crash-preview.resting{animation-play-state:paused}
 .crash-controls{display:flex;flex-direction:column;gap:18px;min-width:0}
 .crash-field{display:flex;flex-direction:column;gap:8px;min-width:0}
 .crash-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
@@ -85,4 +75,4 @@
 .screen-full-wait{color:var(--fg-3);font-size:12.5px}
 @media (max-width:820px){.crash-body{grid-template-columns:1fr}.crash-stage{position:static}}
 @media (max-width:420px){.crash-themes{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (prefers-reduced-motion: reduce){.crash-body,.crash-preview{animation:none}.crash-theme:hover,.crash-swatch:hover{transform:none}}
+@media (prefers-reduced-motion: reduce){.crash-body{animation:none}.crash-theme:hover,.crash-swatch:hover{transform:none}}

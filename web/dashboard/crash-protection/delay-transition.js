@@ -5,7 +5,7 @@
 let dtState = {theme:'halo', shape:'horizontal'};
 let dtDefaults = {headline:'', subline:''};
 let dtRefreshTimer = null;
-const dtPreview = screenPreview({frame:'s-dt-preview-frame', strip:'s-dt-preview', video:'s-dt-preview-video'});
+const dtPreview = screenPreview({frame:'s-dt-preview-frame', video:'s-dt-preview-video'});
 
 // Form fields for POST /config.
 function dtFields(){
@@ -45,8 +45,7 @@ function dtRefresh(){
   if ($('s-dt-details').hidden || !screensShown('transition')) { dtPreview.pause(); return; }
   const look = dtLook();
   screenDrawThumbs($('s-dt-themes'), look);
-  const theme = cpThemes.find(t => t.id === dtState.theme);
-  dtPreview.refresh(look, dtState.shape, !!(theme && theme.soft));
+  dtPreview.refresh(look, dtState.shape);
 }
 function dtApplyConfig(dt){
   if (!dt) return;

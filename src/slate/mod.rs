@@ -103,37 +103,21 @@ impl fmt::Display for UnsupportedShape {
 
 impl std::error::Error for UnsupportedShape {}
 
-/// The screen at each of `phases` (moments of the loop, 0..1), stacked
-/// top to bottom in one PNG. Drawn by the same code as the stream, so the
-/// dashboard preview is exactly what viewers get; one image for the whole
-/// animation keeps the dashboard to a single request per change.
-pub fn preview_png(
-    settings: &CrashProtection,
-    width: usize,
-    height: usize,
-    phases: &[f32],
-) -> Vec<u8> {
+/// The screen at `phase` (a moment of the loop, 0..1) as a PNG, for the
+/// dashboard's style thumbnails. Drawn by the same code as the stream.
+pub fn preview_png(settings: &CrashProtection, width: usize, height: usize, phase: f32) -> Vec<u8> {
     let style = screen_style(settings);
-    let frames = phases
-        .iter()
-        .map(|phase| {
-            let mut canvas = Canvas::new(width, height, style.background);
-            themes::draw(&mut canvas, &style, *phase);
-            canvas
-        })
-        .collect();
-    Canvas::stacked(frames)
-        .unwrap_or_else(|| Canvas::new(width, height, style.background))
-        .to_png()
+    let mut canvas = Canvas::new(width, height, style.background);
+    themes::draw(&mut canvas, &style, phase);
+    canvas.to_png()
 }
 
-/// Frame rate of the dashboard's video preview of a soft screen: the
-/// stream's own, so it moves exactly as viewers see it.
+/// Frame rate of the dashboard's video preview: the stream's own, so it
+/// moves exactly as viewers see it.
 const PREVIEW_FPS: u32 = 30;
 
-/// The screen as a looping H.264 video, for the dashboard's preview of
-/// soft themes: smooth motion a strip of stills can't show, from the
-/// encoder the stream uses, so the preview is what viewers get. `None`
+/// The screen as a looping H.264 video, for the dashboard's preview: from
+/// the encoder the stream uses, so the preview is what viewers get. `None`
 /// for a size the encoder can't take.
 pub fn preview_mp4(settings: &CrashProtection, width: usize, height: usize) -> Option<Vec<u8>> {
     let shape = StreamShape {
@@ -245,10 +229,9 @@ fn encode_interval(
     let (keyframes, mut shown) = match codec {
         SlateCodec::H264 => {
             let sets = encoder::parameter_sets(shape);
-            let first = encoder::encode_idr_within(&source, 0, plan.tolerance);
-            let second = encoder::encode_idr_within(&source, 1, plan.tolerance);
+            let ([first, second], shown) = encoder::encode_idr_pair(&source, plan.tolerance);
             let sample = |idr: &[u8]| bitstream::length_prefixed(&[&sets.sps, &sets.pps, idr]);
-            ([sample(&first.nal), sample(&second.nal)], first.shown)
+            ([sample(&first), sample(&second)], shown)
         }
         SlateCodec::Hevc => {
             let [vps, sps, pps] = hevc::parameter_sets(shape);
@@ -529,6 +512,8 @@ mod tests {
         match theme {
             SlateTheme::Halftone => 5 * max_kbps,
             SlateTheme::Lattice | SlateTheme::Embers => 4 * max_kbps,
+            // Beacon's rings sweep a wide circle every frame.
+            SlateTheme::Beacon => 2 * max_kbps,
             _ if theme.is_soft() => 2 * max_kbps,
             _ => max_kbps,
         }
@@ -640,7 +625,8 @@ mod tests {
     /// parameter sets (id 0) came once at its start; one loop of the screen
     /// with its own in-band; then the stream again from a keyframe that
     /// carries none. Every frame must decode without an error, the screen
-    /// exactly as rendered, and the stream after it exactly as it decodes
+    /// within its tolerance of the render, and the stream after it exactly
+    /// as it decodes
     /// alone: the screen must not disturb the stream's parameter sets.
     /// x264 and x265 stand in for OBS's encoder.
     #[test]
@@ -691,9 +677,15 @@ mod tests {
                 "{codec:?}: stream before the cut"
             );
             let expected_screen = expected_frames(&settings(theme), shape);
+            let worst = screen_frames
+                .iter()
+                .zip(&expected_screen[..loop_bytes])
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
             assert!(
-                screen_frames == &expected_screen[..loop_bytes],
-                "{codec:?}: the screen"
+                worst <= theme.tolerance(),
+                "{codec:?}: the screen is up to {worst} off the render"
             );
             assert!(
                 stream_after == &alone[before_bytes..],
@@ -1037,15 +1029,14 @@ mod tests {
         }
     }
 
-    /// Not a check: builds every soft theme's loop at 1080p (or only the
-    /// one named by `THEME`, at the size `SIZE` names, like `2560x1440`)
-    /// and prints what it costs and how long it took, and saves a still
-    /// and the H.264 loop of each at full size in the temp dir, to look at.
-    /// Run with
-    /// `cargo test --release measure_soft_loops -- --ignored --nocapture`.
+    /// Not a check: builds every theme's loop at 1080p (or only the one
+    /// named by `THEME`, at the size `SIZE` names, like `2560x1440`) and
+    /// prints what it costs and how long it took, and saves a still and the
+    /// H.264 loop of each at full size in the temp dir, to look at. Run
+    /// with `cargo test --release measure_loops -- --ignored --nocapture`.
     #[test]
     #[ignore]
-    fn measure_soft_loops() {
+    fn measure_loops() {
         let size = std::env::var("SIZE").unwrap_or_default();
         let (width, height) = size
             .split_once('x')
@@ -1059,10 +1050,9 @@ mod tests {
         let only = std::env::var("THEME").ok();
         let themes = SlateTheme::ALL
             .into_iter()
-            .filter(|theme| theme.is_soft())
             .filter(|theme| only.as_deref().is_none_or(|id| id == theme.id()));
         for theme in themes {
-            let still = preview_png(&settings(theme), shape.width, shape.height, &[0.3]);
+            let still = preview_png(&settings(theme), shape.width, shape.height, 0.3);
             let path = std::env::temp_dir().join(format!("instantclone-{}.png", theme.id()));
             std::fs::write(&path, still).unwrap();
             let video = preview_mp4(&settings(theme), shape.width, shape.height).unwrap();

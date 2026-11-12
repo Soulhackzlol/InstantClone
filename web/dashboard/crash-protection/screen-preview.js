@@ -1,14 +1,9 @@
 // ── Screen previews (Crash protection, Delay transition) ─────────────────
 // Both screens come from /crash-protection/preview, drawn by the Rust
 // renderer that also encodes the stream. Unsaved edits ride along in the
-// query, so every picture follows each change before Save. Flat styles
-// preview as one strip of stills the CSS steps through; soft styles as
-// their loop encoded the way the stream carries it.
+// query, so every picture follows each change before Save. A preview is
+// the loop encoded the way the stream carries it, at the stream's 30 fps.
 
-// Frames in the preview strip; the CSS animation steps through the same 24.
-// Every flat style moves in 6, 8 or 12 steps per loop, and 24 is a multiple
-// of each, so the preview shows every step at the moment the stream does.
-const SCREEN_PREVIEW_FRAMES = 24;
 const screenStill = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function screenPreviewUrl(params){
@@ -21,48 +16,36 @@ function screenFetch(url){
   return fetch(url).then(response => response.ok ? response.blob() : Promise.reject(response.status));
 }
 
-// The live preview of one editor: its frame, the still strip and the video.
-// It plays only while it can be seen: scrolled away it rests, so an open
-// System pane costs nothing for a preview nobody is watching.
-function screenPreview({frame, strip, video}){
-  frame = $(frame); strip = $(strip); video = $(video);
-  let generation = 0, stripUrl = '', videoUrl = '', isSeen = true;
+// The live preview of one editor: its frame and the video in it. It plays
+// only while it can be seen: scrolled away it rests, so an open System
+// pane costs nothing for a preview nobody is watching. With reduced
+// motion it rests on its first frame.
+function screenPreview({frame, video}){
+  frame = $(frame); video = $(video);
+  let generation = 0, videoUrl = '', isSeen = true;
   const play = () => {
-    if (!video.hidden && isSeen && !screenStill) video.play().catch(() => {});
+    if (video.src && isSeen && !screenStill) video.play().catch(() => {});
     else video.pause();
   };
-  const showVideo = show => { video.hidden = !show; strip.hidden = show; play(); };
-  // A load that lands after a newer one is dropped.
-  const load = (url, use) => {
-    const mine = ++generation;
-    screenFetch(url).then(blob => { if (mine === generation) use(URL.createObjectURL(blob)); }).catch(() => {});
-  };
   if ('IntersectionObserver' in window){
-    new IntersectionObserver(entries => entries.forEach(e => strip.classList.toggle('resting', !e.isIntersecting)))
-      .observe(strip);
     new IntersectionObserver(entries => entries.forEach(e => { isSeen = e.isIntersecting; play(); }))
       .observe(frame);
   }
   return {
     // `params` are crash_protection.* fields; `shape` horizontal or vertical.
-    refresh(params, shape, isSoft){
+    refresh(params, shape){
       frame.classList.toggle('vertical', shape === 'vertical');
-      const query = {...params, orientation: shape};
-      if (isSoft){
-        load(screenPreviewUrl({...query, format: 'mp4'}), url => {
+      // A video that lands after a newer one is dropped.
+      const mine = ++generation;
+      screenFetch(screenPreviewUrl({...params, orientation: shape, format: 'mp4'}))
+        .then(blob => {
+          if (mine !== generation) return;
           URL.revokeObjectURL(videoUrl);
-          videoUrl = url;
-          video.src = url;
-          showVideo(true);
-        });
-        return;
-      }
-      showVideo(false);
-      load(screenPreviewUrl({...query, frames: String(SCREEN_PREVIEW_FRAMES)}), url => {
-        URL.revokeObjectURL(stripUrl);
-        stripUrl = url;
-        strip.style.backgroundImage = 'url("' + url + '")';
-      });
+          videoUrl = URL.createObjectURL(blob);
+          video.src = videoUrl;
+          play();
+        })
+        .catch(() => {});
     },
     pause(){ video.pause(); },
   };

@@ -1,29 +1,29 @@
 //! Soft themes built from many small things instead of one smooth field:
 //! halftone dots, a lit dot grid, rising sparks.
 //!
-//! Fine detail is what costs bits, so each keeps it cheap its own way.
-//! Halftone moves in steps and only redraws dots whose size changed, so
-//! most of its frames repeat the last and are skipped. Lattice keeps its
-//! dots still and only changes how brightly they are lit. Embers draws a
-//! few dozen sparks, so only the blocks they pass through change. Like the
-//! other soft themes they keep the still pool round the text and loop
-//! without a seam.
+//! Fine detail is what costs bits, so each keeps it cheap its own way,
+//! while moving smoothly at the stream's frame rate. Halftone's dots sit
+//! on a fixed grid and only grow or shrink a size, each at its own
+//! moment, so a frame redraws a few of them. Lattice keeps
+//! its dots still and only changes how brightly they are lit. Embers
+//! draws a few dozen sparks, so only the blocks they pass through change.
+//! Like the other soft themes they keep the still pool round the text and
+//! loop without a seam.
 
 use super::font::Align;
 use super::raster::{Canvas, Rgb};
 use super::soft_themes::{centred_baseline, channels, hue_turned, paint_light, Pool};
-use super::themes::{
-    canvas_center, design_scale, draw_text_block, stepped, ScreenStyle, HEADLINE_COLOR,
-};
+use super::themes::{canvas_center, design_scale, draw_text_block, ScreenStyle, HEADLINE_COLOR};
 use std::f32::consts::{PI, TAU};
 
 /// Dot spacing at 1080 px: one dot per 16x16 coding block at full size.
 const HALFTONE_PITCH_AT_1080: f32 = 16.0;
-/// Dot sizes, from a speck to touching its neighbours.
-const HALFTONE_SIZES: usize = 5;
-/// How often per 8 s loop the smoke moves on: 5 times a second. Frames
-/// between repeat the last and cost almost nothing.
-const HALFTONE_STEPS: f32 = 40.0;
+/// Dot sizes, from a speck to touching its neighbours, about a pixel of
+/// radius apart at 1080p. Each change of size recodes the dot, so finer
+/// sizes cost in step: 32 took twice the bits of 8 (measured,
+/// `slate::tests::measure_loops`), and with the smoke moving every frame
+/// dots change size at different moments, which already reads smooth.
+const HALFTONE_SIZES: usize = 12;
 /// The ink before the accent tints it: a light grey, like newsprint
 /// photographs reversed out of black.
 const HALFTONE_INK: Rgb = Rgb::new(0xa4, 0xa8, 0xb0);
@@ -47,8 +47,7 @@ pub fn draw_halftone(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
             (shape, style.background.mix(ink, 0.55 + 0.45 * thickness))
         })
         .collect();
-    // Phase 1.0 is the first step again, not one past the last.
-    let turn = TAU * (stepped(phase, HALFTONE_STEPS) % 1.0);
+    let turn = TAU * phase.fract();
     // The smoke is measured in short sides, so it has the same grain either
     // way up.
     let unit = canvas.width().min(canvas.height()) as f32;
@@ -144,9 +143,6 @@ fn stamp(
 /// Dot spacing and dot radius at 1080 px.
 const LATTICE_PITCH_AT_1080: f32 = 32.0;
 const LATTICE_DOT_AT_1080: f32 = 1.7;
-/// Brightness steps a dot moves through as the light passes: a dot only
-/// changes when it crosses one, not on every frame.
-const LATTICE_LEVELS: f32 = 6.0;
 /// The transform block side the dots are centred in, so each dot's
 /// detail stays inside one block.
 const TRANSFORM_BLOCK: usize = 4;
@@ -201,7 +197,6 @@ pub fn draw_lattice(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
                 continue;
             }
             let light = lit(center_x as f32 / width, center_y as f32 / height);
-            let light = (light * LATTICE_LEVELS).round() / LATTICE_LEVELS;
             let color = idle.mix(bright, light);
             let left = center_x.saturating_sub(cell / 2);
             let top = center_y.saturating_sub(cell / 2);

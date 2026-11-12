@@ -515,18 +515,17 @@ async fn serve(
 /// Render the preview for the saved crash-protection settings with any
 /// unsaved `crash_protection.*` edits from the query applied on top, so
 /// the dashboard can preview before Save. `orientation=vertical` flips it
-/// to 9:16; `phase` (0..1) picks the moment in the 2 s loop, or
-/// `frames=N` stacks N evenly spaced moments into one strip the dashboard
-/// animates; `size=thumb` draws the small version the theme picker shows,
+/// to 9:16; `phase` (0..1) picks the moment of the loop a still shows;
+/// `size=thumb` draws the small version the theme picker shows,
 /// `size=full` the 1080p one the full-size view plays; `format=mp4`
-/// encodes the whole loop as a video instead, the preview of the soft
-/// themes. Answers the content type with the bytes.
+/// encodes the whole loop as a video instead, the dashboard's preview;
+/// `delay` (ms) writes out `{delay}` in the words. Answers the content
+/// type with the bytes.
 fn crash_protection_preview(
     query: &str,
     saved: &crate::crash_protection::CrashProtection,
 ) -> (&'static str, Vec<u8>) {
     const DEFAULT_PHASE: f32 = 0.25;
-    const MAX_FRAMES: usize = 24;
     // Twice the size each is shown at, so they stay sharp on high-DPI
     // screens; full size is what a 1080p stream carries.
     const PREVIEW: (usize, usize) = (960, 540);
@@ -558,24 +557,17 @@ fn crash_protection_preview(
     } else {
         (long_side, short_side)
     };
-    let frames = form
-        .get("frames")
-        .and_then(|value| value.parse::<usize>().ok())
-        .map(|count| count.clamp(1, MAX_FRAMES));
-    let phases: Vec<f32> = match frames {
-        Some(count) => (0..count).map(|i| i as f32 / count as f32).collect(),
-        None => vec![form
-            .get("phase")
-            .and_then(|value| value.parse::<f32>().ok())
-            .filter(|value| (0.0..1.0).contains(value))
-            .unwrap_or(DEFAULT_PHASE)],
-    };
     if form.get("format").map(String::as_str) == Some("mp4") {
         if let Some(video) = crate::slate::preview_mp4(&settings, width, height) {
             return ("video/mp4", video);
         }
     }
-    let image = crate::slate::preview_png(&settings, width, height, &phases);
+    let phase = form
+        .get("phase")
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| (0.0..1.0).contains(value))
+        .unwrap_or(DEFAULT_PHASE);
+    let image = crate::slate::preview_png(&settings, width, height, phase);
     ("image/png", image)
 }
 
@@ -7383,21 +7375,24 @@ mod tests {
         let thumb = image("size=thumb");
         assert_eq!(size(&thumb), (384, 216));
         assert_eq!(size(&image("size=full")), (1920, 1080));
-        let strip = image("frames=24");
-        assert_eq!(size(&strip), (960, 540 * 24), "24 frames stacked");
-        let capped = image("frames=500&size=thumb");
-        assert_eq!(size(&capped), (384, 216 * 24));
-        // A soft theme's video preview: an MP4, starting with its ftyp box.
-        let (content_type, video) =
-            crash_protection_preview("crash_protection.theme=halo&size=thumb&format=mp4", &saved);
-        assert_eq!(content_type, "video/mp4");
-        assert_eq!(&video[4..8], b"ftyp");
+        assert_ne!(
+            image("phase=0.1"),
+            image("phase=0.6"),
+            "phase picks the moment"
+        );
+        // The video preview: an MP4, starting with its ftyp box.
+        for theme in ["halo", "whisper"] {
+            let query = format!("crash_protection.theme={theme}&size=thumb&format=mp4");
+            let (content_type, video) = crash_protection_preview(&query, &saved);
+            assert_eq!(content_type, "video/mp4", "{theme}");
+            assert_eq!(&video[4..8], b"ftyp", "{theme}");
+        }
         // The delay transition's words name an example delay.
         let named =
             image("crash_protection.headline=Loading%20a%20%7Bdelay%7D%20delay&delay=60000");
         let written = image("crash_protection.headline=Loading%20a%201%20min%20delay");
         assert_eq!(named, written, "{{delay}} written out");
-        for preview_only in ["orientation", "size", "phase", "frames", "format", "delay"] {
+        for preview_only in ["orientation", "size", "phase", "format", "delay"] {
             assert!(
                 !is_settable_key(preview_only),
                 "preview-only params never persist"
