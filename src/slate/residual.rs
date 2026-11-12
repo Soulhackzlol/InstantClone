@@ -327,6 +327,7 @@ pub fn rebuild_luma_4x4(levels: &[Block4; 16], qp: i32) -> [i32; 256] {
 }
 
 /// The quantised coefficients of one 8x8 chroma block.
+#[derive(Clone)]
 pub struct ChromaLevels {
     /// The four 4x4 blocks' DC terms after their 2x2 transform, raster.
     pub dc: [i32; 4],

@@ -23,7 +23,14 @@
 //! Stream shape: Constrained Baseline, CAVLC, one slice per picture, a
 //! single reference frame, POC type 2 (output order = decode order).
 
+mod follow;
 mod inter;
+mod wipe;
+
+pub use follow::{read_pps_id, read_sps, Follower};
+#[cfg(test)]
+pub use wipe::WIPE_PICTURES;
+pub use wipe::{build_wipe, wipe_pictures, Wipe};
 
 use super::bitstream::{self, BitWriter};
 use super::fidelity;

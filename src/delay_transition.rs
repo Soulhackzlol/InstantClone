@@ -6,8 +6,11 @@
 //! it, then picks up exactly where viewers left off: nothing replayed,
 //! nothing missed. The screen has its own style and words, in the
 //! crash-protection screen's colours, and its words can name the delay
-//! being turned on (`DELAY_TOKEN`). Destinations whose video the screens
-//! can't stand in for (AV1, 10-bit HEVC) jump as before.
+//! being turned on (`DELAY_TOKEN`). On H.264 the screen washes in over the
+//! stream's last picture in a luma wipe (`slate::encoder::wipe`); where
+//! the wipe can't follow the stream (HEVC, Baseline, unusual numbering) it
+//! cuts straight to the screen. Destinations whose video the screens can't
+//! stand in for (AV1, 10-bit HEVC) jump as before.
 //!
 //! This file owns the `delay_transition.*` config keys; the screen is
 //! played by `crate::crash_hold::play_transition`.

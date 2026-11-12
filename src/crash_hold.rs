@@ -33,6 +33,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod wipe_in;
+
 /// Frame rate of the reconnect screen. It is a still-ish loop, so 30 is
 /// plenty and halves the encode work of 60.
 pub const SLATE_FPS: u32 = 30;
@@ -203,6 +205,8 @@ enum VideoTrack {
     Screen {
         shape: StreamShape,
         codec: SlateCodec,
+        /// Tags played once before the loop: a delay transition's wipe.
+        intro: Vec<Vec<u8>>,
         /// The loop's keyframe intervals as tags, in play order.
         intervals: Vec<Interval>,
     },
@@ -210,6 +214,13 @@ enum VideoTrack {
 }
 
 impl VideoTrack {
+    /// Play `tags` once before the screen's loop.
+    fn open_with(&mut self, tags: Vec<Vec<u8>>) {
+        if let VideoTrack::Screen { intro, .. } = self {
+            *intro = tags;
+        }
+    }
+
     fn screen(slate: &SlateLoop, target: ScreenTarget) -> Self {
         let tag = |keyframe: bool, sample: &[u8]| {
             video_tag(target.framing, target.fourcc, keyframe, sample)
@@ -229,6 +240,7 @@ impl VideoTrack {
         VideoTrack::Screen {
             shape: slate.shape,
             codec: target.codec,
+            intro: Vec::new(),
             intervals,
         }
     }
@@ -516,7 +528,7 @@ pub async fn play(
     let settings = ctrl.crash_protection();
     let what = "crash protection";
     let cache = (&ctrl.slate_cache, SoftLoop::BuildIt);
-    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what)).await else {
+    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what), None).await else {
         return Ok(ended);
     };
     ctrl.log(format!(
@@ -546,7 +558,8 @@ pub async fn play_transition(
     let settings = ctrl.transition_screen(ctrl.target_delay_ms());
     let what = "the delay transition";
     let cache = (&ctrl.transition_cache, SoftLoop::LeaveIt);
-    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what)).await else {
+    let wipe_from = Some(paused_at);
+    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what), wipe_from).await else {
         return Ok(TransitionOutcome {
             exit: TransitionExit::Unavailable,
             last_ts: after_ts,
@@ -579,12 +592,16 @@ struct Screen {
 
 /// The screen `settings` describe, from `cache`, framed for `dest`.
 /// `None` (and a log line naming `what` it was for) when the destination
-/// can't be covered or the loop couldn't be built.
+/// can't be covered or the loop couldn't be built. With `wipe_from` (the
+/// ring seq the stream paused at), the screen opens with the luma wipe
+/// from the stream's last picture, on every track or (when one can't
+/// follow its stream) none.
 async fn screen_for(
     ctrl: &Arc<Controller>,
     dest: &Arc<DestinationState>,
     (cache, then): (&Arc<SlateCache>, SoftLoop),
     (settings, what): (&CrashProtection, &str),
+    wipe_from: Option<u64>,
 ) -> Option<Screen> {
     let plan = match plan_for(ctrl, dest) {
         Ok(plan) => plan,
@@ -596,8 +613,12 @@ async fn screen_for(
             return None;
         }
     };
+    let egress = dest.video_egress()?;
+    // The same headers, in the same order, the plan was made from.
+    let headers = video_headers_for(ctrl, egress);
     let mut video = Vec::with_capacity(plan.video.len());
-    for source in plan.video {
+    let mut wipes = Vec::with_capacity(plan.video.len());
+    for (source, (_, header)) in plan.video.into_iter().zip(&headers) {
         video.push(match source {
             VideoSource::Screen(target) => {
                 let built = cache
@@ -607,10 +628,32 @@ async fn screen_for(
                     ctrl.log(format!("[{}] {what} couldn't build its screen", dest.id));
                     return None;
                 };
+                wipes.push(
+                    wipe_from
+                        .zip(slate.wipe.as_ref())
+                        .and_then(|(paused_at, wipe)| {
+                            wipe_in::wipe_tags(ctrl, egress, (header, target), paused_at, wipe)
+                        }),
+                );
                 VideoTrack::screen(&slate, target)
             }
-            VideoSource::HeldFrame(tag) => VideoTrack::HeldFrame(tag),
+            VideoSource::HeldFrame(tag) => {
+                wipes.push(None);
+                VideoTrack::HeldFrame(tag)
+            }
         });
+    }
+    if wipe_from.is_some() {
+        if wipes.iter().all(Option::is_some) {
+            for (track, wipe) in video.iter_mut().zip(wipes.into_iter().flatten()) {
+                track.open_with(wipe);
+            }
+        } else {
+            ctrl.log(format!(
+                "[{}] {what} cuts straight to its screen: the wipe can't follow this stream",
+                dest.id
+            ));
+        }
     }
     // No sequence header: the loop's keyframes carry their own parameter
     // sets in-band under ids the stream doesn't use (see slate::encoder),
@@ -671,8 +714,14 @@ fn describe(video: &[VideoTrack]) -> String {
     video
         .iter()
         .map(|track| match track {
-            VideoTrack::Screen { shape, codec, .. } => {
-                format!("{}x{} {}", shape.width, shape.height, codec.label())
+            VideoTrack::Screen {
+                shape,
+                codec,
+                intro,
+                ..
+            } => {
+                let wipe = if intro.is_empty() { "" } else { ", wiped in" };
+                format!("{}x{} {}{wipe}", shape.width, shape.height, codec.label())
             }
             VideoTrack::HeldFrame(_) => "last keyframe held".to_string(),
         })
@@ -772,11 +821,17 @@ pub(crate) fn delay_rebuilt(
     (spanned >= delay_ms).then_some(first_seq)
 }
 
-/// The tag `track` sends for screen frame `index`, if any: every frame of
-/// the loop, or the held keyframe once a second.
+/// The tag `track` sends for screen frame `index`, if any: its intro,
+/// then every frame of the loop; or the held keyframe once a second.
 fn video_frame(track: &VideoTrack, index: u64) -> Option<&[u8]> {
     match track {
-        VideoTrack::Screen { intervals, .. } => {
+        VideoTrack::Screen {
+            intro, intervals, ..
+        } => {
+            if let Some(tag) = intro.get(index as usize) {
+                return Some(tag);
+            }
+            let index = index - intro.len() as u64;
             let per_interval = 1 + intervals[0].deltas.len() as u64;
             let keyframes_sent = index / per_interval;
             let interval = &intervals[(keyframes_sent % intervals.len() as u64) as usize];
@@ -844,6 +899,19 @@ pub struct SlateCache {
     building: crate::sync::Mutex<HashSet<SlateKey>>,
     /// Counts every ask, to tell which loop has gone unasked longest.
     asks: std::sync::atomic::AtomicU64,
+    /// Whether loops come with the luma wipe into them: the delay
+    /// transition's do (`SlateCache::with_wipes`).
+    wipes: bool,
+}
+
+impl SlateCache {
+    /// A cache whose H.264 loops come with the luma wipe into them.
+    pub fn with_wipes() -> Self {
+        Self {
+            wipes: true,
+            ..Self::default()
+        }
+    }
 }
 
 /// A loop built, with the settings it was built with and the ask it was
@@ -954,7 +1022,7 @@ impl SlateCache {
         let cache = self.clone();
         let settings = settings.clone();
         let task = tokio::spawn(async move {
-            let slate = build(settings.clone(), shape, codec, urgency).await;
+            let slate = build(settings.clone(), (shape, codec), urgency, cache.wipes).await;
             if let Some(slate) = &slate {
                 cache.keep(key.clone(), settings, slate.clone());
             }
@@ -1051,12 +1119,12 @@ enum Urgency {
 /// loop (or two destinations' sizes) never build side by side.
 static QUIET_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Encode a loop off the async runtime.
+/// Encode a loop off the async runtime, with its wipe when `with_wipe`.
 async fn build(
     settings: CrashProtection,
-    shape: StreamShape,
-    codec: SlateCodec,
+    (shape, codec): (StreamShape, SlateCodec),
     urgency: Urgency,
+    with_wipe: bool,
 ) -> Option<Arc<SlateLoop>> {
     tokio::task::spawn_blocking(move || {
         let built = match urgency {
@@ -1067,7 +1135,13 @@ async fn build(
                 crate::slate::build_loop_quietly(&settings, shape, codec)
             }
         };
-        built.ok().map(Arc::new)
+        let built = built.ok()?;
+        let built = if with_wipe {
+            built.with_wipe(&settings, codec)
+        } else {
+            built
+        };
+        Some(Arc::new(built))
     })
     .await
     .ok()

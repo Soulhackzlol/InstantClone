@@ -967,7 +967,7 @@ impl Controller {
             hold: crate::sync::Mutex::new(None),
             slate_cache: Arc::default(),
             delay_transition: crate::sync::Mutex::new(Default::default()),
-            transition_cache: Arc::default(),
+            transition_cache: Arc::new(crate::crash_hold::SlateCache::with_wipes()),
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
             rate_in: RateMeter::default(),

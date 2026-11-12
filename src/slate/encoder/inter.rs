@@ -85,7 +85,7 @@ fn motion_bits(motion: Motion, predicted: Motion) -> u32 {
 const MB_TYPE_P_L0_16X16: u32 = 0;
 /// coded_block_pattern by codeNum for inter macroblocks (Table 9-4).
 #[rustfmt::skip]
-const INTER_CBP_BY_CODE: [u32; 48] = [
+pub(super) const INTER_CBP_BY_CODE: [u32; 48] = [
     0, 16, 1, 2, 4, 8, 32, 3, 5, 10, 12, 15, 47, 7, 11, 13,
     14, 6, 9, 31, 35, 37, 42, 44, 33, 34, 36, 40, 39, 43, 45, 46,
     17, 18, 20, 24, 19, 21, 26, 28, 23, 27, 29, 30, 22, 25, 38, 41,
