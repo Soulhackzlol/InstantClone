@@ -15,6 +15,7 @@ use std::ffi::c_void;
 use std::io;
 use std::os::windows::ffi::OsStrExt as _;
 use std::path::Path;
+use std::ptr::NonNull;
 
 use windows_sys::core::{GUID, HRESULT};
 use windows_sys::Win32::System::Com::{
@@ -36,7 +37,7 @@ type Release = unsafe extern "system" fn(*mut c_void) -> u32;
 struct ShellLinkVtbl {
     query_interface: QueryInterface,
     _add_ref: usize,
-    release: Release,
+    _release: Release,
     // GetPath, GetIDList, SetIDList, GetDescription, SetDescription,
     // GetWorkingDirectory.
     _unused_3_to_8: [usize; 6],
@@ -55,40 +56,61 @@ struct ShellLinkVtbl {
 struct PersistFileVtbl {
     _query_interface: usize,
     _add_ref: usize,
-    release: Release,
+    _release: Release,
     // GetClassID, IsDirty, Load.
     _unused_3_to_5: [usize; 3],
     save: SetTextAndNumber,
 }
 
-/// One COM interface pointer, released when dropped. Every interface starts
-/// with IUnknown, so `release` sits in the same slot of both vtables.
-struct Interface<V> {
-    raw: *mut *const V,
+/// The first three slots of every COM vtable (IUnknown's), so any interface
+/// can be released the same way.
+#[repr(C)]
+struct UnknownVtbl {
+    _query_interface: usize,
+    _add_ref: usize,
     release: Release,
+}
+
+/// One COM interface pointer, released when dropped. Both pointers are
+/// checked when it is adopted, so neither is ever read while null.
+struct Interface<V> {
+    /// The object: it starts with a pointer to its vtable.
+    object: NonNull<*const V>,
+    vtbl: NonNull<V>,
 }
 
 impl<V> Interface<V> {
     /// Wrap a pointer COM just handed over (one reference, ours to release).
-    unsafe fn adopt(raw: *mut c_void, release: impl Fn(&V) -> Release) -> Self {
-        let raw = raw.cast::<*const V>();
-        let release = release(&**raw);
-        Self { raw, release }
+    /// None when it handed over no object, or one without a vtable.
+    ///
+    /// Safety: `raw` is null or a live COM object whose vtable is `V`.
+    unsafe fn adopt(raw: *mut c_void) -> Option<Self> {
+        let object = NonNull::new(raw.cast::<*const V>())?;
+        let vtbl = NonNull::new(object.as_ptr().read().cast_mut())?;
+        Some(Self { object, vtbl })
     }
 
     fn vtbl(&self) -> &V {
-        unsafe { &**self.raw }
+        // Checked non-null in `adopt`; the object keeps it alive until drop.
+        unsafe { self.vtbl.as_ref() }
     }
 
     fn this(&self) -> *mut c_void {
-        self.raw.cast()
+        self.object.as_ptr().cast()
     }
 }
 
 impl<V> Drop for Interface<V> {
     fn drop(&mut self) {
-        unsafe { (self.release)(self.this()) };
+        // Every vtable here is #[repr(C)] and starts with IUnknown's slots.
+        let unknown = self.vtbl.cast::<UnknownVtbl>();
+        unsafe { (unknown.as_ref().release)(self.this()) };
     }
+}
+
+/// The error for a COM call that reported success but handed over nothing.
+fn no_object(step: &str) -> io::Error {
+    io::Error::other(format!("could not {step} (no object came back)"))
 }
 
 /// Write a shortcut at `lnk` that runs `exe` with `arguments` from `workdir`,
@@ -119,7 +141,8 @@ unsafe fn write(lnk: &Path, exe: &Path, arguments: &str, workdir: &Path) -> io::
         ),
         "create the shortcut",
     )?;
-    let link = Interface::<ShellLinkVtbl>::adopt(raw, |v| v.release);
+    let link =
+        Interface::<ShellLinkVtbl>::adopt(raw).ok_or_else(|| no_object("create the shortcut"))?;
     let calls = link.vtbl();
     check(
         (calls.set_path)(link.this(), wide(exe.as_os_str()).as_ptr()),
@@ -143,7 +166,8 @@ unsafe fn write(lnk: &Path, exe: &Path, arguments: &str, workdir: &Path) -> io::
         (calls.query_interface)(link.this(), &IID_IPERSISTFILE, &mut raw),
         "open it for saving",
     )?;
-    let file = Interface::<PersistFileVtbl>::adopt(raw, |v| v.release);
+    let file =
+        Interface::<PersistFileVtbl>::adopt(raw).ok_or_else(|| no_object("open it for saving"))?;
     // TRUE: the shortcut keeps this path as its own file name.
     check(
         (file.vtbl().save)(file.this(), wide(lnk.as_os_str()).as_ptr(), 1),
