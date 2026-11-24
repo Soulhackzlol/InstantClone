@@ -409,9 +409,9 @@ impl PictureCoder<'_> {
         let Some((x, y, area)) = chroma_area else {
             return;
         };
-        for plane in 0..2 {
-            let index = z_index(x / area, y / area);
-            if let Some(levels) = &tree.residual.chroma[plane][index] {
+        let index = z_index(x / area, y / area);
+        for plane in &tree.residual.chroma {
+            if let Some(levels) = &plane[index] {
                 hevc_residual::write(&mut self.cabac, contexts, levels, area / 2, true);
             }
         }

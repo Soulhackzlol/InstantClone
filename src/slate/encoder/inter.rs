@@ -431,14 +431,14 @@ impl PictureCoder<'_> {
     fn restore(&mut self, position: MbPosition, state: &MacroblockState) {
         let index = self.index_of(position);
         self.motions[index] = state.motion;
-        for at in 0..16 {
+        for (at, &count) in state.luma_counts.iter().enumerate() {
             let index = self.luma_count_index(position, at % 4, at / 4);
-            self.luma_counts[index] = state.luma_counts[at];
+            self.luma_counts[index] = count;
         }
-        for plane in 0..2 {
-            for at in 0..4 {
+        for (plane, counts) in state.chroma_counts.iter().enumerate() {
+            for (at, &count) in counts.iter().enumerate() {
                 let index = self.chroma_count_index(position, at % 2, at / 2);
-                self.chroma_counts[plane][index] = state.chroma_counts[plane][at];
+                self.chroma_counts[plane][index] = count;
             }
         }
         self.store(position, &state.luma, &state.chroma);
