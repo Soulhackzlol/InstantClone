@@ -460,10 +460,16 @@ async fn serve(
     if method == "GET" && bare_path == "/crash-protection/preview" {
         let query = path.split_once('?').map_or("", |(_, q)| q).to_string();
         let saved = settings.borrow().crash_protection.clone();
-        let (content_type, image) =
-            tokio::task::spawn_blocking(move || crash_protection_preview(&query, &saved))
+        let is_live = ctrl.ingest_alive();
+        let preview =
+            tokio::task::spawn_blocking(move || crash_protection_preview(&query, &saved, is_live))
                 .await
                 .map_err(io::Error::other)?;
+        let Some((content_type, image)) = preview else {
+            // A newer preview for the same editor replaced this one.
+            write_simple(&mut sock, "204 No Content", "text/plain", "", "").await?;
+            return Ok(());
+        };
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
              Cache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -520,11 +526,14 @@ async fn serve(
 /// `size=full` the 1080p one the full-size view plays; `format=mp4`
 /// encodes the whole loop as a video instead, the dashboard's preview;
 /// `delay` (ms) writes out `{delay}` in the words. Answers the content
-/// type with the bytes.
+/// type with the bytes, or None for a video a newer request from the same
+/// editor (`slot`) replaced before it was encoded (see `PreviewQueue`).
+/// `is_live`: a stream is on, so a video encodes on one thread.
 fn crash_protection_preview(
     query: &str,
     saved: &crate::crash_protection::CrashProtection,
-) -> (&'static str, Vec<u8>) {
+    is_live: bool,
+) -> Option<(&'static str, Vec<u8>)> {
     const DEFAULT_PHASE: f32 = 0.25;
     // Twice the size each is shown at, so they stay sharp on high-DPI
     // screens; full size is what a 1080p stream carries.
@@ -558,8 +567,10 @@ fn crash_protection_preview(
         (long_side, short_side)
     };
     if form.get("format").map(String::as_str) == Some("mp4") {
-        if let Some(video) = crate::slate::preview_mp4(&settings, width, height) {
-            return ("video/mp4", video);
+        let ticket = PREVIEWS.ticket(form.get("slot").map(String::as_str));
+        let _turn = PREVIEWS.turn(ticket)?;
+        if let Some(video) = crate::slate::preview_mp4(&settings, width, height, is_live) {
+            return Some(("video/mp4", video));
         }
     }
     let phase = form
@@ -568,7 +579,67 @@ fn crash_protection_preview(
         .filter(|value| (0.0..1.0).contains(value))
         .unwrap_or(DEFAULT_PHASE);
     let image = crate::slate::preview_png(&settings, width, height, phase);
-    ("image/png", image)
+    Some(("image/png", image))
+}
+
+/// Video previews encode one at a time. Each is a whole loop, and an
+/// editor asks for a new one 250 ms after each edit, so a streamer
+/// dragging a colour picker while live would otherwise stack encodes and
+/// take cores from OBS. A request that a newer one from the same editor
+/// replaced while it waited is dropped before it encodes.
+struct PreviewQueue {
+    turn: std::sync::Mutex<()>,
+    tickets: std::sync::atomic::AtomicU64,
+    /// The newest ticket of each editor, in `PREVIEW_SLOTS` order.
+    newest: [std::sync::atomic::AtomicU64; PREVIEW_SLOTS.len()],
+}
+
+/// The editors that ask for video previews: the crash screen's, the delay
+/// transition's, and the full-size view.
+const PREVIEW_SLOTS: [&str; 3] = ["crash", "transition", "full"];
+
+static PREVIEWS: PreviewQueue = PreviewQueue::new();
+
+/// A place in the `PreviewQueue`: its number and the editor it is for.
+#[derive(Clone, Copy)]
+struct PreviewTicket {
+    number: u64,
+    slot: Option<usize>,
+}
+
+impl PreviewQueue {
+    const fn new() -> Self {
+        use std::sync::atomic::AtomicU64;
+        Self {
+            turn: std::sync::Mutex::new(()),
+            tickets: AtomicU64::new(0),
+            newest: [const { AtomicU64::new(0) }; PREVIEW_SLOTS.len()],
+        }
+    }
+
+    /// A ticket for the editor named `slot`: from now on its newest. A
+    /// request naming no known editor is never replaced.
+    fn ticket(&self, slot: Option<&str>) -> PreviewTicket {
+        use std::sync::atomic::Ordering;
+        let number = self.tickets.fetch_add(1, Ordering::Relaxed) + 1;
+        let slot = slot.and_then(|name| PREVIEW_SLOTS.iter().position(|s| *s == name));
+        if let Some(slot) = slot {
+            self.newest[slot].store(number, Ordering::Relaxed);
+        }
+        PreviewTicket { number, slot }
+    }
+
+    /// Wait for the encode turn. None when a newer ticket for the same
+    /// editor was taken meanwhile: that request will draw it instead.
+    fn turn(&self, ticket: PreviewTicket) -> Option<std::sync::MutexGuard<'_, ()>> {
+        use std::sync::atomic::Ordering;
+        // A preview that panicked held it last; the lock guards no data.
+        let turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
+        let is_newest = ticket
+            .slot
+            .is_none_or(|slot| self.newest[slot].load(Ordering::Relaxed) == ticket.number);
+        is_newest.then_some(turn)
+    }
 }
 
 /// Result of the auth gate: either it already wrote a response (login page,
@@ -7379,11 +7450,30 @@ mod tests {
         assert!(loaded.midi.entries().iter().all(|(_, m)| m.is_empty()));
     }
 
+    /// A video preview that a newer one from the same editor replaced while
+    /// it waited is never encoded; other editors' previews are untouched.
+    #[test]
+    fn a_replaced_preview_gives_its_turn_away() {
+        let queue = PreviewQueue::new();
+        let older = queue.ticket(Some("transition"));
+        let crash = queue.ticket(Some("crash"));
+        let newer = queue.ticket(Some("transition"));
+        let unnamed = queue.ticket(None);
+        assert!(queue.turn(older).is_none(), "replaced: skipped");
+        assert!(queue.turn(newer).is_some(), "the newest draws");
+        assert!(queue.turn(crash).is_some(), "another editor's stays");
+        assert!(
+            queue.turn(unnamed).is_some(),
+            "no editor named: never replaced"
+        );
+    }
+
     #[test]
     fn crash_protection_preview_applies_unsaved_edits() {
         let saved = crate::crash_protection::CrashProtection::default();
         let image = |query: &str| {
-            let (content_type, bytes) = crash_protection_preview(query, &saved);
+            let (content_type, bytes) =
+                crash_protection_preview(query, &saved, false).expect("a still");
             assert_eq!(content_type, "image/png", "{query}");
             bytes
         };
@@ -7409,16 +7499,19 @@ mod tests {
         // The video preview: an MP4, starting with its ftyp box.
         for theme in ["halo", "whisper"] {
             let query = format!("crash_protection.theme={theme}&size=thumb&format=mp4");
-            let (content_type, video) = crash_protection_preview(&query, &saved);
-            assert_eq!(content_type, "video/mp4", "{theme}");
-            assert_eq!(&video[4..8], b"ftyp", "{theme}");
+            for is_live in [false, true] {
+                let (content_type, video) =
+                    crash_protection_preview(&query, &saved, is_live).expect("a video");
+                assert_eq!(content_type, "video/mp4", "{theme}");
+                assert_eq!(&video[4..8], b"ftyp", "{theme}");
+            }
         }
         // The delay transition's words name an example delay.
         let named =
             image("crash_protection.headline=Loading%20a%20%7Bdelay%7D%20delay&delay=60000");
         let written = image("crash_protection.headline=Loading%20a%201%20min%20delay");
         assert_eq!(named, written, "{{delay}} written out");
-        for preview_only in ["orientation", "size", "phase", "format", "delay"] {
+        for preview_only in ["orientation", "size", "phase", "format", "delay", "slot"] {
             assert!(
                 !is_settable_key(preview_only),
                 "preview-only params never persist"

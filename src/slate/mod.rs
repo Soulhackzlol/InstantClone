@@ -118,14 +118,24 @@ const PREVIEW_FPS: u32 = 30;
 
 /// The screen as a looping H.264 video, for the dashboard's preview: from
 /// the encoder the stream uses, so the preview is what viewers get. `None`
-/// for a size the encoder can't take.
-pub fn preview_mp4(settings: &CrashProtection, width: usize, height: usize) -> Option<Vec<u8>> {
+/// for a size the encoder can't take. `is_quiet` encodes on one thread, for
+/// while a stream is live and OBS needs the cores.
+pub fn preview_mp4(
+    settings: &CrashProtection,
+    width: usize,
+    height: usize,
+    is_quiet: bool,
+) -> Option<Vec<u8>> {
     let shape = StreamShape {
         width,
         height,
         fps: PREVIEW_FPS,
     };
-    let slate = build_loop(settings, shape, SlateCodec::H264).ok()?;
+    let slate = match is_quiet {
+        true => build_loop_quietly(settings, shape, SlateCodec::H264),
+        false => build_loop(settings, shape, SlateCodec::H264),
+    }
+    .ok()?;
     let sets = encoder::parameter_sets(shape);
     Some(mp4::h264_loop(&slate, &sets, PREVIEW_FPS))
 }
@@ -1116,7 +1126,7 @@ mod tests {
             let still = preview_png(&settings(theme), shape.width, shape.height, 0.3);
             let path = std::env::temp_dir().join(format!("instantclone-{}.png", theme.id()));
             std::fs::write(&path, still).unwrap();
-            let video = preview_mp4(&settings(theme), shape.width, shape.height).unwrap();
+            let video = preview_mp4(&settings(theme), shape.width, shape.height, false).unwrap();
             std::fs::write(path.with_extension("mp4"), video).unwrap();
             for codec in CODECS {
                 let started = std::time::Instant::now();
@@ -1158,7 +1168,7 @@ mod tests {
             return;
         }
         let theme = SlateTheme::Aurora;
-        let video = preview_mp4(&settings(theme), 192, 108).expect("an even size");
+        let video = preview_mp4(&settings(theme), 192, 108, false).expect("an even size");
         let path =
             std::env::temp_dir().join(format!("instantclone-preview-{}.mp4", std::process::id()));
         std::fs::write(&path, &video).unwrap();

@@ -2668,6 +2668,8 @@ impl Controller {
             }
             self.held_keyframes.lock().clear();
             self.slate_cache.clear();
+        } else {
+            self.slate_cache.keep_only_for(&settings);
         }
         *self.crash_protection.lock() = settings;
     }
@@ -2723,9 +2725,14 @@ impl Controller {
         self.delay_transition.lock().clone()
     }
 
-    /// The screen a delay transition to `delay_ms` plays.
-    pub fn transition_screen(&self, delay_ms: u32) -> crate::crash_protection::CrashProtection {
-        self.delay_transition().screen(delay_ms)
+    /// The screen a delay transition to `delay_ms` plays; `was_on`: from a
+    /// delay already on, so it raises it.
+    pub fn transition_screen(
+        &self,
+        delay_ms: u32,
+        was_on: bool,
+    ) -> crate::crash_protection::CrashProtection {
+        self.delay_transition().screen(delay_ms, was_on)
     }
 
     /// The screen a delay going off or down to `delay_ms` plays.
@@ -4018,6 +4025,7 @@ async fn play_transition(
     use crate::crash_hold::TransitionExit;
     let screen_from = crate::crash_hold::TransitionStart {
         after_ts: last_output_ts(state),
+        was_on: state.landed_delay_ms > 0,
         kind,
     };
     let outcome = crate::crash_hold::play_transition(ctrl, dest, sink, screen_from).await?;
@@ -4038,9 +4046,12 @@ async fn play_transition(
             None => rejoin_idr(ctrl, dest, paused.seq).await,
         },
         // OBS went away mid-screen: on from the next keyframe after where
-        // viewers paused (never back over what they saw), and the pump's
-        // own paths carry on from there (airing what the delay holds,
-        // then the reconnect screen if one covers it).
+        // viewers paused, and the pump's own paths carry on from there
+        // (airing what the delay holds, then the reconnect screen if one
+        // covers it). With no keyframe after it yet (a delay shorter than
+        // a keyframe interval), from the one before: up to an interval
+        // seen again, so the last moments before OBS went still decode
+        // instead of being dropped.
         TransitionExit::Interrupted => ctrl
             .ring
             .oldest_idr_at_or_after(paused.seq)
@@ -4062,7 +4073,10 @@ async fn play_transition(
         "[{}] delay transition done - back on the stream, {back}",
         dest.id
     ));
+    let from = (state.consumer_seq, state.last_sent_input_ts);
+    let before_base = state.output_ts_base;
     rejoin_at(ctrl, dest, sink, state, idr).await?;
+    note_cut(ctrl, dest, from, &idr, (before_base, state.output_ts_base));
     if interrupted {
         state.landed_delay_ms = landed_before;
     }
@@ -4578,7 +4592,8 @@ fn delay_off_by(ctrl: &Controller, current_delay: u64, target_delay: u64) -> (bo
 }
 
 /// Whether the pump at `current` already sits where the delay on now puts
-/// it, so no cut is due for it (as `compute_delay_cut` judges).
+/// it, so no cut is due for it (as `compute_delay_cut` judges). On a full
+/// ring that is as far back as the ring reaches (`reachable_delay`).
 fn delay_has_landed(ctrl: &Controller, current: &TagMeta) -> bool {
     let Some(latest) = ctrl.ring.latest_ts() else {
         return false;
@@ -4586,8 +4601,27 @@ fn delay_has_landed(ctrl: &Controller, current: &TagMeta) -> bool {
     let current_delay = latest.saturating_sub(current.ts_ms);
     match u64::from(ctrl.target_delay_ms()) {
         0 => current_delay < recut_dead_band_ms(ctrl.keyframe_interval_ms()),
-        target_delay => delay_off_by(ctrl, current_delay, target_delay) == (false, false),
+        target_delay => {
+            let goal = reachable_delay(ctrl, latest, target_delay);
+            delay_off_by(ctrl, current_delay, goal) == (false, false)
+        }
     }
+}
+
+/// The most of `target_delay` the buffer can give. A full ring reaches
+/// back only to its keyframe near the oldest tag (`delayed_idr`), so a pump
+/// there has all the delay there is: the back cuts that follow as the ring
+/// stretches (a quieter scene, a lower bitrate) are no raise by the
+/// streamer and play no screen. While the buffer still refills (nothing to
+/// join yet) the goal stays the whole delay, so the jump that restores it
+/// later still counts as a change.
+fn reachable_delay(ctrl: &Controller, latest: u64, target_delay: u64) -> u64 {
+    if !ctrl.ring.is_saturated() {
+        return target_delay;
+    }
+    delayed_idr(ctrl, target_delay).map_or(target_delay, |idr| {
+        latest.saturating_sub(idr.ts_ms).min(target_delay)
+    })
 }
 
 /// The delay a pump at `at` sits on: the one on now when it is there or
@@ -4688,47 +4722,14 @@ async fn apply_cut(
     let last_out_ts = state.output_ts_base.wrapping_add(input_delta_u32);
     let new_output_ts_base = last_out_ts.wrapping_add(1);
 
-    // Detailed cut trace - every cut writes one log line with the
-    // before/after seq, the input-ts jump, and the resulting output_ts
-    // base. Now logs the ACTUAL new base (previously the formatter just
-    // showed `old+1`, useless for diagnosing post-cut drift), plus the
-    // current seq_header_gen so reconnect/codec-change events line up.
-    {
-        let prev_seq = state.consumer_seq;
-        let prev_ts = state.last_sent_input_ts;
-        let new_seq = cut.target.seq;
-        let new_ts = cut.target.ts_ms;
-        let direction = if new_ts > prev_ts {
-            "FWD"
-        } else if new_ts < prev_ts {
-            "BACK"
-        } else {
-            "SAME"
-        };
-        let delta_ms = (new_ts as i64) - (prev_ts as i64);
-        let gen = ctrl.seq_header_gen.load(Ordering::Relaxed);
-        ctrl.log(format!(
-            "[{}] CUT {} seq:{}→{}  ts:{}→{}  delta:{}ms  out_ts_base:0x{:08x}→0x{:08x}  gen:{}",
-            dest.id,
-            direction,
-            prev_seq,
-            new_seq,
-            prev_ts,
-            new_ts,
-            delta_ms,
-            state.output_ts_base,
-            new_output_ts_base,
-            gen,
-        ));
-        crate::trace::log(
-            "CUT",
-            &format!(
-                "dest={} dir={} seq={}→{} in_ts={}→{} delta_ms={} out_ts_base=0x{:08x}→0x{:08x} gen={}",
-                dest.id, direction, prev_seq, new_seq, prev_ts, new_ts, delta_ms,
-                state.output_ts_base, new_output_ts_base, gen,
-            ),
-        );
-    }
+    let from = (state.consumer_seq, state.last_sent_input_ts);
+    note_cut(
+        ctrl,
+        dest,
+        from,
+        &cut.target,
+        (state.output_ts_base, new_output_ts_base),
+    );
 
     state.output_ts_base = new_output_ts_base;
     state.input_ts_anchor = cut.target.ts_ms;
@@ -4773,8 +4774,43 @@ async fn apply_cut(
         Ordering::Relaxed,
     );
 
-    dest.cuts_performed.fetch_add(1, Ordering::Relaxed);
     Ok(())
+}
+
+/// Count a cut from `from` (seq, input ts) to `to` and write its line:
+/// the before/after seq, the input-ts jump and the output_ts base it moves
+/// `bases` to (old, new), plus the current seq_header_gen so reconnect and
+/// codec-change events line up. Every jump the pump makes writes one, the
+/// delay transition's included.
+fn note_cut(
+    ctrl: &Controller,
+    dest: &DestinationState,
+    (prev_seq, prev_ts): (u64, u64),
+    to: &TagMeta,
+    (old_base, new_base): (u32, u32),
+) {
+    let (new_seq, new_ts) = (to.seq, to.ts_ms);
+    let direction = match new_ts.cmp(&prev_ts) {
+        std::cmp::Ordering::Greater => "FWD",
+        std::cmp::Ordering::Less => "BACK",
+        std::cmp::Ordering::Equal => "SAME",
+    };
+    let delta_ms = (new_ts as i64) - (prev_ts as i64);
+    let gen = ctrl.seq_header_gen.load(Ordering::Relaxed);
+    ctrl.log(format!(
+        "[{}] CUT {direction} seq:{prev_seq}→{new_seq}  ts:{prev_ts}→{new_ts}  delta:{delta_ms}ms  \
+         out_ts_base:0x{old_base:08x}→0x{new_base:08x}  gen:{gen}",
+        dest.id,
+    ));
+    crate::trace::log(
+        "CUT",
+        &format!(
+            "dest={} dir={direction} seq={prev_seq}→{new_seq} in_ts={prev_ts}→{new_ts} \
+             delta_ms={delta_ms} out_ts_base=0x{old_base:08x}→0x{new_base:08x} gen={gen}",
+            dest.id,
+        ),
+    );
+    dest.cuts_performed.fetch_add(1, Ordering::Relaxed);
 }
 
 async fn send_sequence_headers(
@@ -5181,8 +5217,16 @@ mod tests {
 
         // The catch-up screen: no delay first, then the profiles below the
         // 30 s armed (a delay can only go down to those), when its words
-        // name the delay.
-        assert_eq!(h.ctrl.catch_up_delays(&profiles), [0]);
+        // name the delay. As they came they do ("Delay down to 15 s").
+        assert_eq!(h.ctrl.catch_up_delays(&profiles), [0, 15_000, 5_000]);
+        plain.set("catch_up_headline", "Back to live");
+        plain.set("catch_up_subline", "Catching up");
+        h.ctrl.update_delay_transition(plain.clone());
+        assert_eq!(
+            h.ctrl.catch_up_delays(&profiles),
+            [0],
+            "words naming nothing"
+        );
         plain.set("catch_up_subline", "Down to {delay}");
         h.ctrl.update_delay_transition(plain);
         assert_eq!(h.ctrl.catch_up_delays(&profiles), [0, 15_000, 5_000]);
@@ -6898,6 +6942,35 @@ mod tests {
             !delay_has_landed(&h.ctrl, &current),
             "a raise still to come"
         );
+    }
+
+    /// A delay longer than a full ring holds has landed once the pump sits
+    /// as far back as the ring reaches, so the back cuts that follow as the
+    /// ring stretches play no "Going back" screen; a pump on live video has
+    /// not landed.
+    #[tokio::test]
+    async fn a_delay_capped_by_a_full_ring_has_landed_at_the_cap() {
+        let n = UNIQ.fetch_add(1, TestOrd::SeqCst);
+        let path = env::temp_dir().join(format!("ic-test-full-{}-{}.buf", std::process::id(), n));
+        let _ = std::fs::remove_file(&path);
+        // About 20 s of the fed tags: far short of the minute armed.
+        let ring = Arc::new(DiskRing::create(&path, 64 * 1024).expect("ring create"));
+        let h = Harness {
+            ctrl: Arc::new(Controller::new(ring, 60_000)),
+            path,
+        };
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        feed_seconds(&h.ctrl, 0, 90, 30);
+        assert!(h.ctrl.ring.is_saturated(), "the ring is full");
+        h.ctrl
+            .activate_delay()
+            .expect("a full ring is ready to delay");
+        assert_eq!(h.ctrl.target_delay_ms(), 60_000);
+        let cap = delayed_idr(&h.ctrl, 60_000).expect("a full ring delays by what it holds");
+        assert!(delay_has_landed(&h.ctrl, &cap), "at the cap: landed");
+        assert_eq!(delay_at(&h.ctrl, &cap), 60_000, "counts as the delay on");
+        let live = h.ctrl.ring.newest_idr().unwrap();
+        assert!(!delay_has_landed(&h.ctrl, &live), "on live: still to come");
     }
 
     /// A pump further behind than the delay (a join, or a keyframe landing

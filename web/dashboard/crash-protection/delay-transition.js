@@ -8,7 +8,7 @@
 let dtState = {theme:'halo', accent:'#5ac8fa', background:'', shape:'horizontal', screen:'into', loaded:false};
 let dtDefaults = {headline:'', subline:'', catch_up_headline:'', catch_up_subline:''};
 let dtRefreshTimer = null;
-const dtPreview = screenPreview({frame:'s-dt-preview-frame', video:'s-dt-preview-video'});
+const dtPreview = screenPreview({frame:'s-dt-preview-frame', video:'s-dt-preview-video', slot:'transition'});
 
 // Form fields for POST /config.
 function dtFields(){

@@ -15,9 +15,9 @@
 
 use super::residual::{self, Block4, ChromaLevels, LevelTooLarge, TokenTable};
 use super::{
-    add_clipped, difference, distance, is_within, macroblock_of, read_square, BitWriter,
-    MbPosition, PictureCoder, CHROMA_MB, CHROMA_SAMPLES, LUMA_BLOCK_AT, LUMA_SAMPLES, MB, PCM_BITS,
-    P_SLICE_INTRA_OFFSET, QP_LADDER, ZIGZAG,
+    add_clipped, difference, distance, is_within, macroblock_of, mb_qp_delta, read_square,
+    BitWriter, MbPosition, PictureCoder, CHROMA_MB, CHROMA_SAMPLES, LUMA_BLOCK_AT, LUMA_SAMPLES,
+    MB, PCM_BITS, P_SLICE_INTRA_OFFSET, QP_LADDER, ZIGZAG,
 };
 
 /// A macroblock's motion: where in the previous picture its prediction
@@ -393,7 +393,7 @@ impl PictureCoder<'_> {
         if pattern == 0 {
             return Ok(false);
         }
-        w.se(attempt.qp - self.qp); // mb_qp_delta
+        w.se(mb_qp_delta(attempt.qp, self.qp));
         for (blk, (column, row)) in LUMA_BLOCK_AT.iter().enumerate() {
             if luma_pattern & 1 << (blk / 4) == 0 {
                 continue;

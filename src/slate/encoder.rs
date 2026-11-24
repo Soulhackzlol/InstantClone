@@ -54,7 +54,7 @@ const SLICE_TYPE_I: u32 = 7;
 const PCM_TOTAL_COEFF: u32 = 16;
 
 /// Visible size and frame rate of the stream being encoded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StreamShape {
     pub width: usize,
     pub height: usize,
@@ -315,6 +315,18 @@ const SLICE_QP: i32 = 26;
 /// The quantisers a block with residual is tried at, coarsest first; it
 /// takes the first that lands within the tolerance.
 const QP_LADDER: [i32; 6] = [34, 28, 22, 16, 10, 4];
+/// How many QPs there are; a decoder takes QP modulo this (8.2.1 / 7.4.5).
+const QP_COUNT: i32 = 52;
+
+/// The mb_qp_delta that takes a macroblock from `previous` QP to `qp`.
+/// It must sit in -26..=25 (7.4.5), but the ladder can step further (34
+/// down to 4), so the delta goes the short way round: a decoder adds it
+/// to the previous QP modulo 52 and lands on `qp` either way.
+fn mb_qp_delta(qp: i32, previous: i32) -> i32 {
+    let half = QP_COUNT / 2;
+    (qp - previous + half).rem_euclid(QP_COUNT) - half
+}
+
 /// What an I_PCM macroblock costs: past this, raw samples are cheaper.
 const PCM_BITS: usize = 8 * (LUMA_SAMPLES + 2 * CHROMA_SAMPLES);
 
@@ -544,7 +556,7 @@ impl<'a> PictureCoder<'a> {
         let luma_pattern = if has_luma_ac { 12 } else { 0 };
         w.ue(type_offset + 1 + luma_mode + 4 * chroma_pattern + luma_pattern);
         w.ue(chroma_mode);
-        w.se(attempt.qp - self.qp); // mb_qp_delta
+        w.se(mb_qp_delta(attempt.qp, self.qp));
         self.set_counts(position, 0);
 
         // Intra16x16DCLevel takes its nC as block 0 would.
@@ -934,6 +946,21 @@ fn chroma_dc(edges: &Edges, x_offset: usize, y_offset: usize) -> i32 {
 mod tests {
     use super::super::raster::{Canvas, Rgb};
     use super::*;
+
+    /// Every step between two QPs the coder can use goes into a delta the
+    /// spec allows, and a decoder adding it modulo 52 lands on the new QP.
+    #[test]
+    fn every_qp_step_is_a_legal_delta() {
+        let qps = QP_LADDER.iter().copied().chain([SLICE_QP]);
+        for previous in qps.clone() {
+            for qp in qps.clone() {
+                let delta = mb_qp_delta(qp, previous);
+                assert!((-26..=25).contains(&delta), "{previous} -> {qp}: {delta}");
+                let decoded = (previous + delta + QP_COUNT).rem_euclid(QP_COUNT);
+                assert_eq!(decoded, qp, "{previous} -> {qp} via {delta}");
+            }
+        }
+    }
 
     const BACKGROUND: Rgb = Rgb::new(0x0e, 0x0f, 0x12);
     const SHAPE_1080P: StreamShape = StreamShape {

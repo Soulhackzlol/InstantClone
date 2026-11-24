@@ -30,6 +30,12 @@ const HEADLINE_DEFAULT: &str = "Going back {delay}";
 const SUBLINE_DEFAULT: &str = "Turning the delay on";
 const CATCH_UP_HEADLINE_DEFAULT: &str = "Going back to the present";
 const CATCH_UP_SUBLINE_DEFAULT: &str = "Catching up with the stream";
+/// The words left as they came use these for a delay that only moves: up
+/// from one already on, or down to one still on. The defaults above are
+/// for a delay turned on or off, and would misread for these.
+const RAISE_HEADLINE_DEFAULT: &str = "Delay up to {delay}";
+const LOWER_HEADLINE_DEFAULT: &str = "Delay down to {delay}";
+const MOVE_SUBLINE_DEFAULT: &str = "Back in a moment";
 const THEME_DEFAULT: SlateTheme = SlateTheme::Halo;
 const NO_DELAY_WORDS: &str = "no delay";
 
@@ -98,14 +104,51 @@ impl DelayTransition {
 
     /// The screen a transition to a delay of `delay_ms` plays, in its own
     /// style, colours and words (drawn by the crash screen's renderer).
-    pub fn screen(&self, delay_ms: u32) -> CrashProtection {
-        self.worded(&self.headline, &self.subline, delay_ms)
+    /// `was_on`: a delay was already on, so this one raises it.
+    pub fn screen(&self, delay_ms: u32, was_on: bool) -> CrashProtection {
+        let (headline, subline) = self.rising_words(was_on);
+        self.worded(headline, subline, delay_ms)
     }
 
     /// The screen a delay going off or down to `delay_ms` plays: the same
     /// look with the catch-up words.
     pub fn catch_up_screen(&self, delay_ms: u32) -> CrashProtection {
-        self.worded(&self.catch_up_headline, &self.catch_up_subline, delay_ms)
+        let (headline, subline) = self.falling_words(delay_ms > 0);
+        self.worded(headline, subline, delay_ms)
+    }
+
+    /// The words for a delay going up. As they came, they fit the change:
+    /// "Going back 30 s, Turning the delay on" for one turned on, "Delay up
+    /// to 1 min" for one already on. Words the streamer wrote stay theirs.
+    fn rising_words(&self, was_on: bool) -> (&str, &str) {
+        if !was_on {
+            return (&self.headline, &self.subline);
+        }
+        (
+            unless_edited(&self.headline, HEADLINE_DEFAULT, RAISE_HEADLINE_DEFAULT),
+            unless_edited(&self.subline, SUBLINE_DEFAULT, MOVE_SUBLINE_DEFAULT),
+        )
+    }
+
+    /// The words for a delay going down, the same way: "Going back to the
+    /// present" for one turned off, "Delay down to 15 s" for one that
+    /// `stays_on`.
+    fn falling_words(&self, stays_on: bool) -> (&str, &str) {
+        if !stays_on {
+            return (&self.catch_up_headline, &self.catch_up_subline);
+        }
+        (
+            unless_edited(
+                &self.catch_up_headline,
+                CATCH_UP_HEADLINE_DEFAULT,
+                LOWER_HEADLINE_DEFAULT,
+            ),
+            unless_edited(
+                &self.catch_up_subline,
+                CATCH_UP_SUBLINE_DEFAULT,
+                MOVE_SUBLINE_DEFAULT,
+            ),
+        )
     }
 
     fn worded(&self, headline: &str, subline: &str, delay_ms: u32) -> CrashProtection {
@@ -127,12 +170,16 @@ impl DelayTransition {
     /// Whether the words name the delay, so each delay draws its own
     /// screen.
     pub fn names_the_delay(&self) -> bool {
-        self.headline.contains(DELAY_TOKEN) || self.subline.contains(DELAY_TOKEN)
+        [false, true]
+            .into_iter()
+            .any(|was_on| names_it(self.rising_words(was_on)))
     }
 
     /// Whether the catch-up words name the delay.
     pub fn catch_up_names_the_delay(&self) -> bool {
-        self.catch_up_headline.contains(DELAY_TOKEN) || self.catch_up_subline.contains(DELAY_TOKEN)
+        [false, true]
+            .into_iter()
+            .any(|stays_on| names_it(self.falling_words(stays_on)))
     }
 
     /// Config lines for every setting that differs from its default.
@@ -188,6 +235,20 @@ impl DelayTransition {
             ("catch_up_subline", self.catch_up_subline.clone()),
         ]
     }
+}
+
+/// `words`, or `instead` while they are still the `default` they came as.
+fn unless_edited<'a>(words: &'a str, default: &str, instead: &'a str) -> &'a str {
+    if words == default {
+        instead
+    } else {
+        words
+    }
+}
+
+/// Whether a headline and small line name the delay.
+fn names_it((headline, subline): (&str, &str)) -> bool {
+    headline.contains(DELAY_TOKEN) || subline.contains(DELAY_TOKEN)
 }
 
 /// Headline words cleaned the way the crash-protection screen's are.
@@ -262,7 +323,7 @@ mod tests {
         };
         transition.set("accent", "#FF6B6B");
         transition.set("accent", "red");
-        let screen = transition.screen(30_000);
+        let screen = transition.screen(30_000, false);
         assert_eq!(screen.theme, SlateTheme::Embers);
         assert_eq!(
             screen.accent,
@@ -276,7 +337,7 @@ mod tests {
         );
         transition.set("background", "#101010");
         assert_eq!(
-            transition.screen(0).background,
+            transition.screen(0, false).background,
             Some(Rgb::new(0x10, 0x10, 0x10))
         );
         transition.set("background", "");
@@ -303,25 +364,70 @@ mod tests {
         assert!(transition.names_the_delay());
         transition.set("headline", "Going {delay} back, {delay}!");
         transition.set("subline", "Hold on");
-        let screen = transition.screen(300_000);
-        assert_eq!(screen.headline, "Going 5 min back, 5 min!");
-        assert_eq!(screen.subline, "Hold on");
+        for was_on in [false, true] {
+            let screen = transition.screen(300_000, was_on);
+            assert_eq!(screen.headline, "Going 5 min back, 5 min!", "written: kept");
+            assert_eq!(screen.subline, "Hold on");
+        }
         transition.set("headline", "Back soon");
         assert!(!transition.names_the_delay());
+    }
+
+    /// Words left as they came fit the change: a delay turned on or off
+    /// reads as that, one only raised or lowered reads as the move. Each
+    /// line the streamer edits stays as written.
+    #[test]
+    fn default_words_fit_how_the_delay_changes() {
+        let mut transition = DelayTransition::default();
+        let words = |screen: CrashProtection| (screen.headline, screen.subline);
+        let pair = |headline: &str, subline: &str| (headline.to_string(), subline.to_string());
+        assert_eq!(
+            words(transition.screen(30_000, false)),
+            pair("Going back 30 s", "Turning the delay on")
+        );
+        assert_eq!(
+            words(transition.screen(60_000, true)),
+            pair("Delay up to 1 min", "Back in a moment")
+        );
+        assert_eq!(
+            words(transition.catch_up_screen(0)),
+            pair("Going back to the present", "Catching up with the stream")
+        );
+        assert_eq!(
+            words(transition.catch_up_screen(15_000)),
+            pair("Delay down to 15 s", "Back in a moment")
+        );
+        assert!(
+            transition.catch_up_names_the_delay(),
+            "a lowered delay is named"
+        );
+
+        transition.set("subline", "Hang tight");
+        assert_eq!(
+            words(transition.screen(60_000, true)),
+            pair("Delay up to 1 min", "Hang tight"),
+            "an edited line stays, the other still fits"
+        );
     }
 
     #[test]
     fn the_catch_up_screen_has_its_own_words_in_the_same_style() {
         let mut transition = DelayTransition::default();
         assert!(!transition.catch_up, "off until the streamer turns it on");
-        assert!(!transition.catch_up_names_the_delay());
+        transition.set("catch_up_headline", "Back to the present");
+        transition.set("catch_up_subline", "Live again");
+        assert!(
+            !transition.catch_up_names_the_delay(),
+            "written words name nothing"
+        );
+        transition.set("catch_up_headline", CATCH_UP_HEADLINE_DEFAULT);
         transition.set("theme", "embers");
         transition.set("catch_up", "on");
         transition.set("background", "#202020");
         transition.set("catch_up_subline", "Down to {delay}");
         let screen = transition.catch_up_screen(10_000);
         assert_eq!(screen.theme, SlateTheme::Embers);
-        assert_eq!(screen.headline, CATCH_UP_HEADLINE_DEFAULT);
+        assert_eq!(screen.headline, "Delay down to 10 s");
         assert_eq!(screen.subline, "Down to 10 s");
         assert!(transition.catch_up_names_the_delay());
 

@@ -727,7 +727,7 @@
 "Small line when the delay goes up": "Subtítulo cuando el delay sube",
 "Headline when the delay goes down": "Titular cuando el delay baja",
 "Small line when the delay goes down": "Subtítulo cuando el delay baja",
-"Write {delay} to show the new delay, like 30 s.": "Escribe {delay} para mostrar el nuevo delay, como 30 s.",
+"Write {delay} to show the new delay, like 30 s. Left as they are, the words fit each change: on, up, down or off.": "Escribe {delay} para mostrar el nuevo delay, como 30 s. Si no los cambias, los textos se ajustan a cada cambio: al activarlo, subirlo, bajarlo o quitarlo.",
 "Save to use your changes": "Guarda para usar tus cambios",
 "Ready on stream": "Lista en el directo",
 "Getting ready, a few seconds": "Preparándola, unos segundos",

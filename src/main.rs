@@ -877,7 +877,8 @@ fn transition_screens(
         false => Vec::new(),
     }
     .into_iter()
-    .map(|delay_ms| ctrl.transition_screen(delay_ms))
+    // Words that fit the next change: from the delay on now.
+    .map(|delay_ms| ctrl.transition_screen(delay_ms, ctrl.target_delay_ms() > 0))
     .collect();
     let catch_up: Vec<_> = match settings.catch_up {
         true => ctrl.catch_up_delays(profiles),
@@ -1230,21 +1231,33 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // down or off plays its own at once: one per delay likely to come
         // when its words name it, the likeliest first and one at a time.
         // The dashboard is told whether they are all ready; with none to
-        // build (no delay armed or in a profile to name) it is told nothing.
-        let mut screens_ready = None;
+        // build (no delay armed or in a profile to name, or no destination
+        // whose video a screen can stand in for) it is told nothing.
         let screens = match ingest_alive && transition_settings.any_screen() && !running.is_empty()
         {
             true => transition_screens(&ctrl, &transition_settings, &rx.borrow().profiles),
             false => Vec::new(),
         };
+        let mut screens_ready = None;
         if !screens.is_empty() {
-            let mut all_ready = true;
+            let (mut all_ready, mut shapes) = (true, std::collections::HashSet::new());
             for id in running.keys() {
-                let targets = crash_hold::screen_targets(&ctrl, &ctrl.destination_state(id));
-                all_ready &=
-                    crash_hold::prebuild_screens(&ctrl.transition_cache, &screens, &targets);
+                match crash_hold::screen_targets(&ctrl, &ctrl.destination_state(id)) {
+                    // Its video isn't known yet: nothing is ready for it.
+                    None => all_ready = false,
+                    Some(targets) => {
+                        shapes.extend(targets.iter().copied());
+                        all_ready &= crash_hold::prebuild_screens(
+                            &ctrl.transition_cache,
+                            &screens,
+                            &targets,
+                        );
+                    }
+                }
             }
-            screens_ready = Some(all_ready);
+            ctrl.transition_cache
+                .keep_room_for(screens.len() * shapes.len());
+            screens_ready = (!shapes.is_empty() || !all_ready).then_some(all_ready);
         }
         ctrl.set_transition_screens_ready(screens_ready);
 

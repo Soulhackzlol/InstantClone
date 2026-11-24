@@ -85,6 +85,11 @@ async fn a_delay_turned_on_plays_the_screen_then_goes_back() {
         "back {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
     );
     assert!(!sim.ended(0), "the session went on");
+    assert_eq!(
+        sim.ctrl.cuts_performed(),
+        1,
+        "the jump under the screen counts as a cut"
+    );
     sim.assert_timestamps_monotonic(0);
 }
 

@@ -11,16 +11,20 @@ function screenPreviewUrl(params){
 }
 
 // Fetch a picture whole and hand it over once it has arrived, so nothing
-// flashes empty or half-drawn while it loads.
+// flashes empty or half-drawn while it loads. A 204 means a newer preview
+// from the same editor replaced this one before it was drawn.
 function screenFetch(url){
-  return fetch(url).then(response => response.ok ? response.blob() : Promise.reject(response.status));
+  return fetch(url).then(response => response.ok && response.status !== 204
+    ? response.blob() : Promise.reject(response.status));
 }
 
 // The live preview of one editor: its frame and the video in it. It plays
 // only while it can be seen: scrolled away it rests, so an open System
 // pane costs nothing for a preview nobody is watching. With reduced
 // motion it rests on its first frame.
-function screenPreview({frame, video}){
+// `slot` names the editor, so the server drops a preview of it that a
+// newer one replaced (crash or transition).
+function screenPreview({frame, video, slot}){
   frame = $(frame); video = $(video);
   let generation = 0, videoUrl = '', isSeen = true;
   const play = () => {
@@ -37,7 +41,7 @@ function screenPreview({frame, video}){
       frame.classList.toggle('vertical', shape === 'vertical');
       // A video that lands after a newer one is dropped.
       const mine = ++generation;
-      screenFetch(screenPreviewUrl({...params, orientation: shape, format: 'mp4'}))
+      screenFetch(screenPreviewUrl({...params, orientation: shape, format: 'mp4', slot}))
         .then(blob => {
           if (mine !== generation) return;
           URL.revokeObjectURL(videoUrl);
@@ -165,7 +169,7 @@ function screenOpenFull(params, shape){
   wait.textContent = 'Drawing it at full size…';
   $('screen-full').hidden = false;
   $('screen-full-close').focus();
-  screenFetch(screenPreviewUrl({...params, orientation: shape, size: 'full', format: 'mp4'}))
+  screenFetch(screenPreviewUrl({...params, orientation: shape, size: 'full', format: 'mp4', slot: 'full'}))
     .then(blob => {
       if (mine !== screenFullGeneration) return;
       URL.revokeObjectURL(screenFullUrl);

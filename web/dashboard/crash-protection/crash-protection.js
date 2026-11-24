@@ -5,7 +5,7 @@ let cpState = {theme:'whisper', accent:'#5ac8fa', background:'', shape:'horizont
 let cpThemes = [];
 let cpDefaults = {headline:'', subline:''};
 let cpRefreshTimer = null;
-const cpPreview = screenPreview({frame:'s-cp-preview-frame', video:'s-cp-preview-video'});
+const cpPreview = screenPreview({frame:'s-cp-preview-frame', video:'s-cp-preview-video', slot:'crash'});
 
 function cpInit(){
   screenBuildColours('s-cp', change => { cpState = {...cpState, ...change}; cpRender(); });
