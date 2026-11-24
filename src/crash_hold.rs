@@ -33,8 +33,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-mod wipe_in;
-
 /// Frame rate of the reconnect screen. It is a still-ish loop, so 30 is
 /// plenty and halves the encode work of 60.
 pub const SLATE_FPS: u32 = 30;
@@ -51,8 +49,7 @@ const HELD_FRAME_EVERY: u64 = SLATE_FPS as u64;
 /// it, or a delay raised meanwhile) and rejoin where the video is.
 const REBUILD_GRACE: Duration = Duration::from_secs(5);
 
-/// How long a delay transition's screen stays up once it has washed in:
-/// long enough to read "Going back 30 s", short enough not to keep viewers
+/// How long a delay transition's screen stays up: long enough to read "Going back 30 s", short enough not to keep viewers
 /// from the stream. Its loops are only this long
 /// (`SlateCache::for_transitions`).
 const MOMENT_FRAMES: u64 = SLATE_FPS as u64;
@@ -60,13 +57,6 @@ const MOMENT_FRAMES: u64 = SLATE_FPS as u64;
 /// without it: a pause this short hides in a player's buffer, and a flat
 /// stand-in already built is found well within it.
 const TRANSITION_SCREEN_WAIT: Duration = Duration::from_millis(400);
-/// Whether a delay transition opens with the luma wipe. TODO: 2026-11-13
-/// off until its PPS reaches viewers: the wipe's pictures need their own
-/// PPS, sent in-band with the first one, and Twitch keeps in-band
-/// parameter sets only on keyframes, so its players can't decode the wipe
-/// (measured live: "non-existing PPS 2" on every wipe picture). Cutting
-/// straight to the screen decodes clean.
-const WIPE_REACHES_VIEWERS: bool = false;
 
 /// Used when an H.264 track's resolution can't be read from its SPS.
 const FALLBACK_SIZE: (u32, u32) = (1280, 720);
@@ -234,8 +224,6 @@ enum VideoTrack {
     Screen {
         shape: StreamShape,
         codec: SlateCodec,
-        /// Tags played once before the loop: a delay transition's wipe.
-        intro: Vec<Vec<u8>>,
         /// The loop's keyframe intervals as tags, in play order.
         intervals: Vec<Interval>,
     },
@@ -243,13 +231,6 @@ enum VideoTrack {
 }
 
 impl VideoTrack {
-    /// Play `tags` once before the screen's loop.
-    fn open_with(&mut self, tags: Vec<Vec<u8>>) {
-        if let VideoTrack::Screen { intro, .. } = self {
-            *intro = tags;
-        }
-    }
-
     fn screen(slate: &SlateLoop, target: ScreenTarget) -> Self {
         let tag = |keyframe: bool, sample: &[u8]| {
             video_tag(target.framing, target.fourcc, keyframe, sample)
@@ -269,7 +250,6 @@ impl VideoTrack {
         VideoTrack::Screen {
             shape: slate.shape,
             codec: target.codec,
-            intro: Vec::new(),
             intervals,
         }
     }
@@ -591,7 +571,7 @@ pub async fn play(
     let settings = ctrl.crash_protection();
     let what = "crash protection";
     let cache = (&ctrl.slate_cache, ScreenUse::Hold);
-    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what), None).await else {
+    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what)).await else {
         return Ok(ended);
     };
     ctrl.log(format!(
@@ -613,24 +593,18 @@ pub async fn play(
 pub struct TransitionStart {
     /// The last output timestamp the destination sent.
     pub after_ts: u32,
-    /// The next tag it would have sent, where viewers paused.
-    pub paused_at: u64,
     pub kind: TransitionKind,
 }
 
 /// Play one of the delay transition's screens into `dest` from `start`:
-/// the wipe, then a moment of screen.
+/// a moment of screen, cut to straight from the stream.
 pub async fn play_transition(
     ctrl: &Arc<Controller>,
     dest: &Arc<DestinationState>,
     sink: &mut EgressSink,
     start: TransitionStart,
 ) -> io::Result<TransitionOutcome> {
-    let TransitionStart {
-        after_ts,
-        paused_at,
-        kind,
-    } = start;
+    let TransitionStart { after_ts, kind } = start;
     // The words name the delay being turned on (or down to): the target now.
     let delay_ms = ctrl.target_delay_ms();
     let (settings, what) = match kind {
@@ -638,7 +612,6 @@ pub async fn play_transition(
         TransitionKind::CatchUp => (ctrl.catch_up_screen(delay_ms), "the catch-up screen"),
     };
     let cache = (&ctrl.transition_cache, ScreenUse::Transition);
-    let wipe_from = WIPE_REACHES_VIEWERS.then_some(paused_at);
     let unavailable = Ok(TransitionOutcome {
         exit: TransitionExit::Unavailable,
         last_ts: after_ts,
@@ -647,7 +620,7 @@ pub async fn play_transition(
     // still building is skipped, never waited on: the delay jumps as it
     // would without the transition, and the build (its own task) carries
     // on for the next change.
-    let fetch = screen_for(ctrl, dest, cache, (&settings, what), wipe_from);
+    let fetch = screen_for(ctrl, dest, cache, (&settings, what));
     let screen = match tokio::time::timeout(TRANSITION_SCREEN_WAIT, fetch).await {
         Ok(Some(screen)) => screen,
         Ok(None) => return unavailable,
@@ -664,10 +637,9 @@ pub async fn play_transition(
         dest.id,
         describe(&screen.video)
     ));
-    let on_air = screen.intro_frames() + MOMENT_FRAMES;
     let base = after_ts.wrapping_add(1);
     let (exit, last_ts) = stream_loop(dest, sink, &screen, base, |frames_sent| {
-        transition_exit(ctrl, dest, frames_sent, on_air)
+        transition_exit(ctrl, dest, frames_sent)
     })
     .await?;
     Ok(TransitionOutcome { exit, last_ts })
@@ -680,32 +652,14 @@ struct Screen {
     audio: Vec<SilentAudio>,
 }
 
-impl Screen {
-    /// Frames played before the loop: the wipe, when it plays.
-    fn intro_frames(&self) -> u64 {
-        self.video
-            .iter()
-            .map(|track| match track {
-                VideoTrack::Screen { intro, .. } => intro.len() as u64,
-                VideoTrack::HeldFrame(_) => 0,
-            })
-            .max()
-            .unwrap_or(0)
-    }
-}
-
 /// The screen `settings` describe, from `cache`, framed for `dest`.
 /// `None` (and a log line naming `what` it was for) when the destination
-/// can't be covered or the loop couldn't be built. With `wipe_from` (the
-/// ring seq the stream paused at), the screen opens with the luma wipe
-/// from the stream's last picture, on every track or (when one can't
-/// follow its stream) none.
+/// can't be covered or the loop couldn't be built.
 async fn screen_for(
     ctrl: &Arc<Controller>,
     dest: &Arc<DestinationState>,
     (cache, screen_use): (&Arc<SlateCache>, ScreenUse),
     (settings, what): (&CrashProtection, &str),
-    wipe_from: Option<u64>,
 ) -> Option<Screen> {
     let plan = match plan_for(ctrl, dest) {
         Ok(plan) => plan,
@@ -717,12 +671,8 @@ async fn screen_for(
             return None;
         }
     };
-    let egress = dest.video_egress()?;
-    // The same headers, in the same order, the plan was made from.
-    let headers = video_headers_for(ctrl, egress);
     let mut video = Vec::with_capacity(plan.video.len());
-    let mut wipes = Vec::with_capacity(plan.video.len());
-    for (source, (_, header)) in plan.video.into_iter().zip(&headers) {
+    for source in plan.video {
         video.push(match source {
             VideoSource::Screen(target) => {
                 let built = cache
@@ -732,32 +682,10 @@ async fn screen_for(
                     ctrl.log(format!("[{}] {what} couldn't build its screen", dest.id));
                     return None;
                 };
-                wipes.push(
-                    wipe_from
-                        .zip(slate.wipe.as_ref())
-                        .and_then(|(paused_at, wipe)| {
-                            wipe_in::wipe_tags(ctrl, egress, (header, target), paused_at, wipe)
-                        }),
-                );
                 VideoTrack::screen(&slate, target)
             }
-            VideoSource::HeldFrame(tag) => {
-                wipes.push(None);
-                VideoTrack::HeldFrame(tag)
-            }
+            VideoSource::HeldFrame(tag) => VideoTrack::HeldFrame(tag),
         });
-    }
-    if wipe_from.is_some() {
-        if wipes.iter().all(Option::is_some) {
-            for (track, wipe) in video.iter_mut().zip(wipes.into_iter().flatten()) {
-                track.open_with(wipe);
-            }
-        } else {
-            ctrl.log(format!(
-                "[{}] {what} cuts straight to its screen: the wipe can't follow this stream",
-                dest.id
-            ));
-        }
     }
     // No sequence header: the loop's keyframes carry their own parameter
     // sets in-band under ids the stream doesn't use (see slate::encoder),
@@ -796,14 +724,13 @@ fn hold_exit(
     }
 }
 
-/// When a delay transition's screen stops: once `frames_sent` reaches
-/// `on_air` (the wipe and a moment of screen), to rejoin (the pump takes
-/// the keyframe the delay puts viewers on); or at once when OBS goes.
+/// When a delay transition's screen stops: once `frames_sent` reaches its
+/// moment (`MOMENT_FRAMES`), to rejoin (the pump takes the keyframe the
+/// delay puts viewers on); or at once when OBS goes.
 fn transition_exit(
     ctrl: &Controller,
     dest: &DestinationState,
     frames_sent: u64,
-    on_air: u64,
 ) -> Option<TransitionExit> {
     if dest.shutdown_requested.load(Ordering::Relaxed) {
         return Some(TransitionExit::Ended);
@@ -811,7 +738,7 @@ fn transition_exit(
     if ctrl.obs_gone() || ctrl.hold_active() || !ctrl.ingest_alive() {
         return Some(TransitionExit::Interrupted);
     }
-    (frames_sent >= on_air).then_some(TransitionExit::Rejoin)
+    (frames_sent >= MOMENT_FRAMES).then_some(TransitionExit::Rejoin)
 }
 
 /// "2560x1440 HEVC, 1280x720 H.264, last keyframe held" for the log.
@@ -819,14 +746,8 @@ fn describe(video: &[VideoTrack]) -> String {
     video
         .iter()
         .map(|track| match track {
-            VideoTrack::Screen {
-                shape,
-                codec,
-                intro,
-                ..
-            } => {
-                let wipe = if intro.is_empty() { "" } else { ", wiped in" };
-                format!("{}x{} {}{wipe}", shape.width, shape.height, codec.label())
+            VideoTrack::Screen { shape, codec, .. } => {
+                format!("{}x{} {}", shape.width, shape.height, codec.label())
             }
             VideoTrack::HeldFrame(_) => "last keyframe held".to_string(),
         })
@@ -927,17 +848,11 @@ pub(crate) fn delay_rebuilt(
     (spanned >= delay_ms).then_some(first_seq)
 }
 
-/// The tag `track` sends for screen frame `index`, if any: its intro,
-/// then every frame of the loop; or the held keyframe once a second.
+/// The tag `track` sends for screen frame `index`, if any: every frame of
+/// the loop in turn; or the held keyframe once a second.
 fn video_frame(track: &VideoTrack, index: u64) -> Option<&[u8]> {
     match track {
-        VideoTrack::Screen {
-            intro, intervals, ..
-        } => {
-            if let Some(tag) = intro.get(index as usize) {
-                return Some(tag);
-            }
-            let index = index - intro.len() as u64;
+        VideoTrack::Screen { intervals, .. } => {
             let per_interval = 1 + intervals[0].deltas.len() as u64;
             let keyframes_sent = index / per_interval;
             let interval = &intervals[(keyframes_sent % intervals.len() as u64) as usize];
@@ -1011,8 +926,7 @@ pub struct SlateCache {
 
 impl SlateCache {
     /// A cache of the delay transition's screens, which play for a moment
-    /// and never loop: the luma wipe into each (H.264) and `MOMENT_FRAMES`
-    /// pictures, a fraction of a loop's encode, so a style the streamer
+    /// and never loop: `MOMENT_FRAMES` pictures each, a fraction of a loop's encode, so a style the streamer
     /// just picked is on stream within seconds.
     pub fn for_transitions() -> Self {
         Self {
@@ -1239,7 +1153,7 @@ enum Urgency {
 static QUIET_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Encode a loop off the async runtime; for a delay transition
-/// (`for_transition`), only the moment it plays and the wipe into it.
+/// (`for_transition`), only the moment it plays.
 async fn build(
     settings: CrashProtection,
     (shape, codec): (StreamShape, SlateCodec),
@@ -1262,13 +1176,7 @@ async fn build(
                 encode()
             }
         };
-        let built = built.ok()?;
-        let built = if for_transition {
-            built.with_wipe(&settings, codec)
-        } else {
-            built
-        };
-        Some(Arc::new(built))
+        built.ok().map(Arc::new)
     })
     .await
     .ok()

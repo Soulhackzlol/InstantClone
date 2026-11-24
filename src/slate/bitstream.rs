@@ -87,18 +87,6 @@ impl BitWriter {
         }
     }
 
-    /// Every bit of `other`, after this writer's own, wherever within a
-    /// byte this writer is: for bits written on their own and joined later
-    /// (a slice body after a header written for one stream). `other` must
-    /// not depend on where bytes start, so it holds no I_PCM samples.
-    pub fn append_unaligned(&mut self, other: &BitWriter) {
-        debug_assert_eq!(other.lead_in, 0, "written to continue another writer");
-        for byte in &other.bytes {
-            self.bits(u32::from(*byte), 8);
-        }
-        self.bits(u32::from(other.current), other.filled);
-    }
-
     /// Zero bits up to the next byte boundary (pcm_alignment_zero_bit).
     pub fn align_with_zeros(&mut self) {
         while self.filled != 0 {

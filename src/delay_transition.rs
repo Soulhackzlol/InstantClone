@@ -5,16 +5,14 @@
 //! destination plays a screen over the jump for about a second ("Going back
 //! 30 s"), and the delay is on at once. The screen has its own style,
 //! colours and words, and its words can name the delay being turned on
-//! (`DELAY_TOKEN`). On H.264 the screen washes in
-//! over the stream's last picture in a luma wipe (`slate::encoder::wipe`);
-//! where the wipe can't follow the stream (HEVC, Baseline, unusual
-//! numbering) it cuts straight to the screen. Destinations whose video the
-//! screens can't stand in for (AV1, 10-bit HEVC) jump as before. Only the
-//! streamer's own changes play a screen, not a slipped delay put right.
+//! (`DELAY_TOKEN`). The stream cuts straight to the screen and back.
+//! Destinations whose video the screens can't stand in for (AV1, 10-bit
+//! HEVC) jump as before. Only the streamer's own changes play a screen, not
+//! a slipped delay put right.
 //!
 //! Turning a delay off (or lowering it) jumps viewers forward instead. With
 //! `catch_up` on, the jump plays a short screen of its own words in the
-//! same style ("Going back to the present"), washed in the same way.
+//! same style.
 //!
 //! This file owns the `delay_transition.*` config keys; the screen is
 //! played by `crate::crash_hold::play_transition`.

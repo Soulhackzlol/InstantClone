@@ -4018,7 +4018,6 @@ async fn play_transition(
     use crate::crash_hold::TransitionExit;
     let screen_from = crate::crash_hold::TransitionStart {
         after_ts: last_output_ts(state),
-        paused_at: paused.seq,
         kind,
     };
     let outcome = crate::crash_hold::play_transition(ctrl, dest, sink, screen_from).await?;

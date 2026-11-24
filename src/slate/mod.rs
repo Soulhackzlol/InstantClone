@@ -26,7 +26,7 @@ mod residual;
 mod soft_themes;
 mod themes;
 
-pub use encoder::{read_pps_id, read_sps, wipe_pictures, Follower, StreamShape, Wipe};
+pub use encoder::StreamShape;
 pub use raster::Rgb;
 
 use crate::crash_protection::CrashProtection;
@@ -71,23 +71,6 @@ pub struct SlateLoop {
     /// The keyframe intervals, in play order. All are the same length.
     pub intervals: Vec<Interval>,
     pub shape: StreamShape,
-    /// The luma wipe into the loop's first picture, for an H.264 loop a
-    /// delay transition plays (`with_wipe`).
-    pub wipe: Option<Wipe>,
-}
-
-impl SlateLoop {
-    /// This loop with the luma wipe into its first picture, when it is
-    /// H.264 (`codec`): what a delay transition plays.
-    pub fn with_wipe(mut self, settings: &CrashProtection, codec: SlateCodec) -> Self {
-        if codec == SlateCodec::H264 {
-            let style = screen_style(settings);
-            let mut canvas = Canvas::new(self.shape.width, self.shape.height, style.background);
-            themes::draw(&mut canvas, &style, 0.0);
-            self.wipe = Some(encoder::build_wipe(&canvas.to_yuv420_padded(16)));
-        }
-        self
-    }
 }
 
 /// One keyframe interval of a loop, as length-prefixed samples (or, once
@@ -235,11 +218,7 @@ fn build_intervals(
         let intervals = (0..count)
             .map(|index| encode_interval(&style, shape, codec, plan(index)))
             .collect();
-        return Ok(SlateLoop {
-            intervals,
-            shape,
-            wipe: None,
-        });
+        return Ok(SlateLoop { intervals, shape });
     }
     let intervals = std::thread::scope(|scope| {
         let style = &style;
@@ -251,11 +230,7 @@ fn build_intervals(
             .map(|worker| worker.join().expect("encoding a screen interval panicked"))
             .collect()
     });
-    Ok(SlateLoop {
-        intervals,
-        shape,
-        wipe: None,
-    })
+    Ok(SlateLoop { intervals, shape })
 }
 
 /// Which frames of the loop one interval holds, and how closely to code
@@ -314,19 +289,6 @@ fn encode_interval(
         (source_canvas, source) = (canvas, frame);
     }
     Interval { keyframes, deltas }
-}
-
-/// Two 10-frame keyframe intervals of a test pattern from x264 (High
-/// profile, `b_frames` B-frames), as an Annex B stream, for tests of what
-/// follows a real stream. `None` when ffmpeg can't run x264.
-#[cfg(test)]
-pub fn x264_stand_in(width: usize, height: usize, b_frames: u32) -> Option<Vec<u8>> {
-    let shape = StreamShape {
-        width,
-        height,
-        fps: 10,
-    };
-    tests::encode_stand_in_stream(SlateCodec::H264, shape, b_frames)
 }
 
 /// A legacy FLV H.264 sequence-header tag describing a `width` x `height`
@@ -415,7 +377,6 @@ fn frames_per_interval(fps: u32) -> usize {
 mod tests {
     use super::*;
     use crate::crash_protection::SlateTheme;
-    use bitstream::BitWriter;
     use std::process::Command;
 
     const CODECS: [SlateCodec; 2] = [SlateCodec::H264, SlateCodec::Hevc];
@@ -786,157 +747,6 @@ mod tests {
                 "{codec:?}: stream after the screen"
             );
         }
-    }
-
-    /// A delay transition's wipe, decoded as viewers' decoders get it: the
-    /// stream (with B-frames and without, so both ways of counting picture
-    /// order), the wipe carrying on from its last picture, the screen's
-    /// loop, then the stream again. Each wipe picture must show every
-    /// block as the share of the stream's last picture the wipe meant to
-    /// keep plus the rest of the screen; the last must be the screen; and
-    /// the stream after must decode exactly as it does alone.
-    #[test]
-    fn a_wipe_carries_on_from_the_streams_last_picture() {
-        if !ffmpeg_is_available("the delay transition's wipe") {
-            return;
-        }
-        let shape = StreamShape {
-            width: 320,
-            height: 180,
-            fps: 10,
-        };
-        let theme = SlateTheme::Beacon;
-        let (luma_bytes, frame_bytes) = (
-            shape.width * shape.height,
-            shape.width * shape.height * 3 / 2,
-        );
-        for b_frames in [0, 2] {
-            let what = format!("{b_frames} B-frames");
-            let Some(stream) = encode_stand_in_stream(SlateCodec::H264, shape, b_frames) else {
-                return;
-            };
-            let cut = second_keyframe_offset(&stream, SlateCodec::H264);
-            let before = &stream[..cut];
-            let after = without_parameter_sets(&stream[cut..], SlateCodec::H264);
-
-            // Follow the stream as a destination got it.
-            let nals = annex_b_nals(before);
-            let sps = nals
-                .iter()
-                .find_map(|nal| encoder::read_sps(nal))
-                .expect("an SPS to follow");
-            let pps_ids: Vec<u32> = nals
-                .iter()
-                .filter_map(|nal| encoder::read_pps_id(nal))
-                .collect();
-            let mut follower = encoder::Follower::new(sps.clone());
-            for nal in &nals {
-                follower.nal(nal).expect("a readable slice header");
-            }
-            let numbering = follower.numbering(&pps_ids).expect("room to carry on");
-
-            let look = settings(theme);
-            let style = screen_style(&look);
-            let mut canvas = Canvas::new(shape.width, shape.height, style.background);
-            themes::draw(&mut canvas, &style, 0.0);
-            let screen = canvas.to_yuv420_padded(16);
-            let wipe = encoder::build_wipe(&screen);
-            assert_eq!(
-                (wipe.width_mbs, wipe.height_mbs),
-                (sps.width_mbs, sps.height_mbs)
-            );
-            let pictures = encoder::wipe_pictures(&wipe, &numbering);
-            let slate = build_loop(&settings(theme), shape, SlateCodec::H264).unwrap();
-            let interval = &slate.intervals[0];
-            let screen_loop = std::iter::once(&interval.keyframes[0]).chain(&interval.deltas);
-            let played = annex_b_samples(pictures.iter().chain(screen_loop));
-            let spliced = [before, &played[..], &after[..]].concat();
-
-            let alone = decode_with_ffmpeg(
-                &[before, &after[..]].concat(),
-                shape.fps,
-                SlateCodec::H264,
-                theme,
-            );
-            let decoded = decode_with_ffmpeg(&spliced, shape.fps, SlateCodec::H264, theme);
-            let loop_frames = frames_per_interval(shape.fps);
-            let before_bytes = STAND_IN_GOP * frame_bytes;
-            assert_eq!(
-                decoded.len(),
-                alone.len() + (encoder::WIPE_PICTURES + loop_frames) * frame_bytes,
-                "{what}: frame count"
-            );
-            let frozen = &alone[before_bytes - frame_bytes..before_bytes];
-            let rendered = expected_frames(&settings(theme), shape);
-            let first_screen = &rendered[..frame_bytes];
-            let blocks_wide = shape.width.div_ceil(16) * 2;
-            for (picture, kept) in wipe.kept.iter().enumerate() {
-                let at = before_bytes + picture * frame_bytes;
-                let shown = &decoded[at..at + frame_bytes];
-                let mut worst = 0f32;
-                let mut total = 0f32;
-                for sample in 0..frame_bytes {
-                    // The 8x8 luma block the sample belongs to.
-                    let (x, y) = if sample < luma_bytes {
-                        (sample % shape.width, sample / shape.width)
-                    } else {
-                        let chroma = (sample - luma_bytes) % (luma_bytes / 4);
-                        (
-                            chroma % (shape.width / 2) * 2,
-                            chroma / (shape.width / 2) * 2,
-                        )
-                    };
-                    let share = kept[(y / 8) * blocks_wide + x / 8];
-                    let expected = share * f32::from(frozen[sample])
-                        + (1.0 - share) * f32::from(first_screen[sample]);
-                    let off = (f32::from(shown[sample]) - expected).abs();
-                    worst = worst.max(off);
-                    total += off;
-                }
-                let mean = total / frame_bytes as f32;
-                // A blend moving on is coded coarsely (a sharp edge in it
-                // lands well off for a picture); the last, which the
-                // screen's own keyframe follows, finely.
-                let is_last = picture + 1 == wipe.kept.len();
-                let (worst_allowed, mean_allowed) = if is_last { (16.0, 0.5) } else { (40.0, 1.0) };
-                assert!(
-                    worst <= worst_allowed && mean <= mean_allowed,
-                    "{what}: wipe picture {picture} is up to {worst} ({mean} on average) off"
-                );
-            }
-            let after_at = before_bytes + (encoder::WIPE_PICTURES + loop_frames) * frame_bytes;
-            assert!(
-                decoded[..before_bytes] == alone[..before_bytes],
-                "{what}: stream before"
-            );
-            assert!(
-                decoded[after_at..] == alone[before_bytes..],
-                "{what}: stream after"
-            );
-        }
-    }
-
-    /// The NAL units of an Annex B stream, without their start codes.
-    fn annex_b_nals(stream: &[u8]) -> Vec<&[u8]> {
-        let starts = nal_starts(stream, SlateCodec::H264);
-        let ends = starts
-            .iter()
-            .skip(1)
-            .map(|(start, _)| *start)
-            .chain([stream.len()]);
-        starts
-            .iter()
-            .zip(ends)
-            .map(|((start, _), end)| {
-                let unit = &stream[*start..end];
-                let code = if unit.starts_with(&[0, 0, 0, 1]) {
-                    4
-                } else {
-                    3
-                };
-                &unit[code..]
-            })
-            .collect()
     }
 
     /// Keyframe interval of the stand-in stream, in frames.
@@ -1335,17 +1145,6 @@ mod tests {
                     keyframe / 1000,
                     started.elapsed()
                 );
-                if codec == SlateCodec::H264 {
-                    let started = std::time::Instant::now();
-                    let wiped = slate.with_wipe(&settings(theme), codec);
-                    let wipe = wiped.wipe.expect("an H.264 loop has a wipe");
-                    let bits: usize = wipe.bodies.iter().map(BitWriter::bit_len).sum();
-                    log_line!(
-                        "{theme:?} wipe: {} KB in {:?}",
-                        bits / 8000,
-                        started.elapsed()
-                    );
-                }
             }
             log_line!("{theme:?} still: {}", path.display());
         }
