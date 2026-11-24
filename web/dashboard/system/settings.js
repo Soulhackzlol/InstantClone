@@ -81,6 +81,7 @@ async function loadConfig({resetSystem = false, live = false} = {}){
       $('s-auto-arm-secs').value = Math.round((c.auto_arm_delay_ms || 15000) / 1000);
       // Its preview is redrawn by the server: only when it changed.
       if (resetSystem || dataChanged('crash-protection', c.crash_protection)) cpApplyConfig(c.crash_protection);
+      if (resetSystem || dataChanged('delay-transition', c.delay_transition)) dtApplyConfig(c.delay_transition);
       settingsMarkClean();
     }
     // Global hotkeys: Windows-only, so the whole section stays hidden

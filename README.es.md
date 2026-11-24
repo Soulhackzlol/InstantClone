@@ -364,7 +364,7 @@ cargo build --release
 .\target\release\instantclone.exe
 ```
 
-El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` (`flate2`, solo build) y se incrusta en el binario; en ejecución se sirve con `Content-Encoding: gzip`. El script opcional de VOD para OBS también va incrustado y se entrega al navegador como descarga "Guardar como", así que siempre coincide con el binario en ejecución y no necesita red.
+El HTML del panel se minifica en tiempo de compilación con `build.rs` y se incrusta en el binario como texto plano (sin gzip: los antivirus leen los bloques comprimidos como un ejecutable empaquetado). El script opcional de VOD para OBS también va incrustado y se entrega al navegador como descarga "Guardar como", así que siempre coincide con el binario en ejecución y no necesita red.
 
 **E/S de disco síncrona en la ruta caliente de escritura al anillo, por elección.** La escritura con buffer aterriza en la caché de páginas del SO en microsegundos y el kernel vacía en segundo plano, así que la caché de páginas ya es el buffer asíncrono; el índice y los bytes avanzan bajo un solo lock para que un lector nunca vea una etiqueta cuyos bytes aún no están en disco.
 

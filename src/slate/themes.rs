@@ -4,13 +4,15 @@
 //! Layout numbers are designed at 1080 px on the short side and scaled,
 //! so the same theme works for every rendition and for vertical canvases.
 //!
-//! Every animation moves in a few discrete steps and only over a small
-//! area: most frames then repeat the previous one exactly and encode as
-//! skipped blocks, which keeps the loop cheap for the streamer's upload.
+//! Every animation moves smoothly, frame by frame at the stream's rate,
+//! and only over a small area: the rest of each frame repeats the last and
+//! encodes as skipped blocks, which keeps the loop cheap for the
+//! streamer's upload.
 
 use super::font::{self, Align, Weight};
 use super::pixel_font::{self, ADVANCE_COLUMNS, GLYPH_COLUMNS, GLYPH_ROWS};
 use super::raster::{Canvas, Rgb};
+use super::{detail_themes, soft_themes};
 use crate::crash_protection::SlateTheme;
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -30,36 +32,33 @@ pub fn draw(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
         SlateTheme::Beacon => draw_beacon(canvas, style, phase),
         SlateTheme::Orbit => draw_orbit(canvas, style, phase),
         SlateTheme::Studio => draw_studio(canvas, style, phase),
+        SlateTheme::Aurora => soft_themes::draw_aurora(canvas, style, phase),
+        SlateTheme::Halo => soft_themes::draw_halo(canvas, style, phase),
+        SlateTheme::Tide => soft_themes::draw_tide(canvas, style, phase),
+        SlateTheme::Halftone => detail_themes::draw_halftone(canvas, style, phase),
+        SlateTheme::Lattice => detail_themes::draw_lattice(canvas, style, phase),
+        SlateTheme::Embers => detail_themes::draw_embers(canvas, style, phase),
     }
 }
 
 /// Short side over the 1080 px design size.
-fn design_scale(canvas: &Canvas) -> f32 {
+pub(super) fn design_scale(canvas: &Canvas) -> f32 {
     canvas.width().min(canvas.height()) as f32 / 1080.0
 }
 
-fn canvas_center(canvas: &Canvas) -> (f32, f32) {
+pub(super) fn canvas_center(canvas: &Canvas) -> (f32, f32) {
     (
         (canvas.width() as f32 / 2.0).round(),
         (canvas.height() as f32 / 2.0).round(),
     )
 }
 
-/// `phase` rounded down to one of `steps` positions.
-/// A phase that lands on a step (0.3333 for 2 of 6) can come out a hair
-/// under it in floating point; the margin keeps it on that step, so the
-/// stream and the preview, which reach a moment by different sums, agree.
-fn stepped(phase: f32, steps: f32) -> f32 {
-    const ON_THE_STEP: f32 = 1e-4;
-    (phase * steps + ON_THE_STEP).floor() / steps
-}
-
-const HEADLINE_COLOR: Rgb = Rgb::new(0xee, 0xf0, 0xf3);
+pub(super) const HEADLINE_COLOR: Rgb = Rgb::new(0xee, 0xf0, 0xf3);
 const SUBLINE_COLOR: Rgb = Rgb::new(0x7d, 0x85, 0x91);
-const HEADLINE_PX: f32 = 46.0;
-const SUBLINE_PX: f32 = 25.0;
+pub(super) const HEADLINE_PX: f32 = 46.0;
+pub(super) const SUBLINE_PX: f32 = 25.0;
 /// Headline baseline to subline baseline, at 1080 px.
-const SUBLINE_DROP_PX: f32 = 48.0;
+pub(super) const SUBLINE_DROP_PX: f32 = 48.0;
 
 /// Unlit dots and empty tracks: the background lifted a little toward the
 /// text, so they read on any background the streamer picks.
@@ -69,7 +68,7 @@ fn idle_color(style: &ScreenStyle) -> Rgb {
 
 /// Headline over subline, placed by `align` at `x`, with the headline's
 /// baseline at `baseline_y`. The text-first themes all set it this way.
-fn draw_text_block(
+pub(super) fn draw_text_block(
     canvas: &mut Canvas,
     style: &ScreenStyle,
     (x, baseline_y): (f32, f32),
@@ -98,13 +97,6 @@ fn draw_text_block(
     font::draw(canvas, style.subline, x, subline_y, subline, SUBLINE_COLOR);
 }
 
-/// Glow levels per dot.
-const WHISPER_GLOW_STEPS: f32 = 8.0;
-/// Moments per loop the glow can change at: 12 a second, a multiple of 6
-/// so each dot's 1/6 offset lands on one, and the dashboard's 24-frame
-/// preview shows every one of them at the moment the stream does.
-const WHISPER_TIME_STEPS: f32 = 24.0;
-
 /// Minimal centred text over three dots whose glow chases left to right.
 fn draw_whisper(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     let scale = design_scale(canvas);
@@ -120,17 +112,13 @@ fn draw_whisper(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     let radius = (7.0 * scale).round().max(1.0);
     let dot_y = (center_y + 100.0 * scale).round();
     for index in 0..3 {
-        let wave = stepped(phase, WHISPER_TIME_STEPS) - index as f32 / 6.0;
+        let wave = phase - index as f32 / 6.0;
         let glow = 0.5 + 0.5 * (TAU * wave).sin();
-        let glow = (glow * WHISPER_GLOW_STEPS).round() / WHISPER_GLOW_STEPS;
         let dot_x = (center_x + (index as f32 - 1.0) * spacing).round();
         let color = idle_color(style).mix(style.accent, glow);
         canvas.fill_circle(dot_x, dot_y, radius, color);
     }
 }
-
-/// Ring sizes per loop.
-const BEACON_STEPS: f32 = 6.0;
 
 /// Centred text under a dot that sends out two radar rings, half a loop
 /// apart, each growing and fading into the background.
@@ -140,7 +128,7 @@ fn draw_beacon(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     let beacon_y = (center_y - 60.0 * scale).round();
     let thickness = (4.0 * scale).max(1.0);
     for offset in [0.0, 0.5] {
-        let progress = stepped((phase + offset).fract(), BEACON_STEPS);
+        let progress = (phase + offset).fract();
         let radius = (14.0 + 54.0 * progress) * scale;
         let color = style.background.mix(style.accent, 0.9 * (1.0 - progress));
         canvas.fill_ring(center_x, beacon_y, radius, radius - thickness, color);
@@ -155,21 +143,21 @@ fn draw_beacon(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
 }
 
 const ORBIT_DOTS: usize = 8;
-/// Glow of the lit dot and the two it just left.
-const ORBIT_TRAIL: [f32; 3] = [1.0, 0.55, 0.25];
+/// How many dots the lit one's trail fades over.
+const ORBIT_TRAIL_DOTS: f32 = 3.0;
 
-/// Centred text under a ring of dots, one lit and chasing clockwise with
-/// a fading trail: the classic loading spinner.
+/// Centred text under a ring of dots, the light chasing clockwise round
+/// them with a fading trail: the classic loading spinner.
 fn draw_orbit(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     let scale = design_scale(canvas);
     let (center_x, center_y) = canvas_center(canvas);
     let spinner_y = center_y - 50.0 * scale;
     let orbit_radius = 34.0 * scale;
     let dot_radius = (6.0 * scale).max(1.0);
-    let lit = (phase * ORBIT_DOTS as f32) as usize % ORBIT_DOTS;
+    // Where the light is, in dots round the ring.
+    let head = phase * ORBIT_DOTS as f32;
     for index in 0..ORBIT_DOTS {
-        let behind = (lit + ORBIT_DOTS - index) % ORBIT_DOTS;
-        let glow = ORBIT_TRAIL.get(behind).copied().unwrap_or(0.0);
+        let glow = chase_glow(head, index, ORBIT_DOTS, ORBIT_TRAIL_DOTS);
         // Dot 0 sits at 12 o'clock; the index grows clockwise.
         let angle = TAU * index as f32 / ORBIT_DOTS as f32 - FRAC_PI_2;
         let dot_x = (center_x + orbit_radius * angle.cos()).round();
@@ -185,8 +173,21 @@ fn draw_orbit(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     );
 }
 
-/// Stripe positions per loop.
-const STUDIO_STEPS: f32 = 12.0;
+/// How lit one of `count` lights in a row (or ring) is while a light
+/// passes along it, `head` lights from the first: full where the light
+/// is, fading over `trail` lights behind it, and rising over the one
+/// ahead as it arrives. Moves smoothly as `head` does.
+fn chase_glow(head: f32, index: usize, count: usize, trail: f32) -> f32 {
+    let behind = (head - index as f32).rem_euclid(count as f32);
+    if behind > count as f32 - 1.0 {
+        // The light is on its way here.
+        let arriving = behind - (count as f32 - 1.0);
+        return arriving * arriving;
+    }
+    let fading = (1.0 - behind / trail).max(0.0);
+    fading * fading
+}
+
 /// On a vertical canvas the text sits this far up from the bottom (of the
 /// height): TikTok and Shorts cover the lowest part with comments and
 /// buttons.
@@ -231,7 +232,7 @@ fn draw_studio(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     // right, clipped to it, so it reads as continuous motion.
     let stripe_width = track_width / 4;
     let travel = (track_width + stripe_width) as f32;
-    let stripe_x = text_x - stripe_width + (travel * stepped(phase, STUDIO_STEPS)) as i32;
+    let stripe_x = text_x - stripe_width + (travel * phase).round() as i32;
     let left = stripe_x.max(text_x);
     let right = (stripe_x + stripe_width).min(text_x + track_width);
     canvas.fill_rect(left, track_y, right - left, track_height, style.accent);
@@ -243,6 +244,8 @@ const ARCADE_SQUARES: usize = 8;
 /// block of the pixel art is a single flat colour.
 const ARCADE_CELL_AT_1080: f32 = 16.0;
 const ARCADE_CURSOR_COLUMNS: i32 = 4;
+/// How many squares the lit one's trail fades over.
+const ARCADE_TRAIL_SQUARES: f32 = 2.0;
 
 /// Pixel art snapped to the cell grid.
 fn draw_arcade(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
@@ -287,15 +290,11 @@ fn draw_arcade(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     let row_width = ARCADE_SQUARES as i32 * square + (ARCADE_SQUARES as i32 - 1) * cell;
     let row_x = snap((width - row_width as f32) / 2.0, cell);
     let row_y = snap((sub_y + rows * sub_cell + 5 * cell) as f32, cell);
-    let lit = ((phase * ARCADE_SQUARES as f32) as usize).min(ARCADE_SQUARES - 1);
-    let trail = (lit + ARCADE_SQUARES - 1) % ARCADE_SQUARES;
+    let head = phase * ARCADE_SQUARES as f32;
     let idle = idle_color(style);
     for index in 0..ARCADE_SQUARES {
-        let color = match index {
-            i if i == lit => style.accent,
-            i if i == trail => idle.mix(style.accent, 0.4),
-            _ => idle,
-        };
+        let glow = chase_glow(head, index, ARCADE_SQUARES, ARCADE_TRAIL_SQUARES);
+        let color = idle.mix(style.accent, glow);
         canvas.fill_rect(
             row_x + index as i32 * (square + cell),
             row_y,
@@ -428,8 +427,9 @@ mod tests {
         let track_columns: Vec<usize> = (track_left..track_left + 360).collect();
         let track_row = (1080.0 - 200.0 + SUBLINE_DROP_PX + 36.0) as usize;
         let mut stripe_seen = false;
-        for step in 0..STUDIO_STEPS as usize {
-            let phase = step as f32 / STUDIO_STEPS;
+        let frames = stream_frames(SlateTheme::Studio);
+        for frame in 0..frames {
+            let phase = frame as f32 / frames as f32;
             let frame = render(&style, 1920, 1080, phase);
             let row = &frame.y[track_row * frame.width..][..1920];
             let background_luma = row[0];
@@ -443,26 +443,30 @@ mod tests {
         assert!(stripe_seen, "the stripe never showed on the track");
     }
 
-    /// The dashboard plays the loop as a strip of 24 frames (web.rs
-    /// crash_protection_preview, crash-protection.js CP_PREVIEW_FRAMES).
-    /// Every stream frame at 30 fps must be the strip frame showing at that
-    /// moment, so the preview moves exactly as viewers see it.
+    /// Frames in one loop of `theme` at the stream's frame rate.
+    fn stream_frames(theme: SlateTheme) -> usize {
+        let per_interval =
+            crate::crash_hold::SLATE_FPS as usize * super::super::KEYFRAME_INTERVAL_MS / 1000;
+        per_interval * theme.loop_intervals()
+    }
+
+    /// Smooth motion: over the first second of every theme's loop, each
+    /// frame the stream sends moves on from the one before. An animation
+    /// held for a few frames at a time is what reads as choppy.
     #[test]
-    fn the_24_frame_preview_shows_every_stream_frame() {
-        const PREVIEW_FRAMES: usize = 24;
-        let stream_frames = crate::crash_hold::SLATE_FPS as usize * super::super::LOOP_MS / 1000;
+    fn every_theme_moves_on_every_frame() {
         for theme in SlateTheme::ALL {
             let style = style(theme);
-            let strip: Vec<YuvFrame> = (0..PREVIEW_FRAMES)
-                .map(|k| render(&style, 480, 270, k as f32 / PREVIEW_FRAMES as f32))
-                .collect();
-            for i in 0..stream_frames {
-                let streamed = render(&style, 480, 270, i as f32 / stream_frames as f32);
-                let shown = &strip[i * PREVIEW_FRAMES / stream_frames];
+            let frames = stream_frames(theme);
+            let at = |frame: usize| render(&style, 480, 270, frame as f32 / frames as f32);
+            let mut before = at(0);
+            for frame in 1..crate::crash_hold::SLATE_FPS as usize {
+                let now = at(frame);
                 assert!(
-                    streamed.y == shown.y && streamed.u == shown.u && streamed.v == shown.v,
-                    "{theme:?}: stream frame {i} of {stream_frames} differs from the preview"
+                    now.y != before.y || now.u != before.u,
+                    "{theme:?} holds frame {frame}"
                 );
+                before = now;
             }
         }
     }

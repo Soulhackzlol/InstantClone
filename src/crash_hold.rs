@@ -22,10 +22,10 @@
 //! unbroken stream.
 
 use crate::controller::{Controller, DestinationState};
-use crate::crash_protection::CrashProtection;
+use crate::crash_protection::{CrashProtection, SlateTheme};
 use crate::h264::{AudioEgress, VideoEgress};
 use crate::rtmp::client::EgressSink;
-use crate::slate::{SlateCodec, SlateLoop, StreamShape};
+use crate::slate::{Interval, SlateCodec, SlateLoop, StreamShape};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -48,6 +48,15 @@ const HELD_FRAME_EVERY: u64 = SLATE_FPS as u64;
 /// waiting this long past the delay itself (a buffer too small to hold
 /// it, or a delay raised meanwhile) and rejoin where the video is.
 const REBUILD_GRACE: Duration = Duration::from_secs(5);
+
+/// How long a delay transition's screen stays up: long enough to read "Going back 30 s", short enough not to keep viewers
+/// from the stream. Its loops are only this long
+/// (`SlateCache::for_transitions`).
+const MOMENT_FRAMES: u64 = SLATE_FPS as u64;
+/// The longest a delay transition waits for its screen before going
+/// without it: a pause this short hides in a player's buffer, and a flat
+/// stand-in already built is found well within it.
+const TRANSITION_SCREEN_WAIT: Duration = Duration::from_millis(400);
 
 /// Used when an H.264 track's resolution can't be read from its SPS.
 const FALLBACK_SIZE: (u32, u32) = (1280, 720);
@@ -138,6 +147,40 @@ pub struct HoldOutcome {
     pub last_ts: u32,
 }
 
+/// Which of the delay transition's screens plays. Each plays for a moment
+/// over the jump the delay makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionKind {
+    /// A delay turned on or raised: then the stream the delay back (its
+    /// last seconds again).
+    JumpBack,
+    /// A delay turned off or lowered: the catch-up screen, then the stream
+    /// where the new delay puts it.
+    CatchUp,
+}
+
+/// Why a delay transition's screen stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionExit {
+    /// The screen has had its moment: rejoin where the delay puts viewers,
+    /// or with no jump due any more, at a keyframe from where they left off.
+    Rejoin,
+    /// OBS went away, or a crash-protection hold began: the pump's own
+    /// paths take over from where viewers left off.
+    Interrupted,
+    /// The screen couldn't be put on air (no loop for this destination):
+    /// nothing was sent, so the delay jumps as it does without a screen.
+    Unavailable,
+    /// The destination is shutting down.
+    Ended,
+}
+
+pub struct TransitionOutcome {
+    pub exit: TransitionExit,
+    /// Last output timestamp sent, so the pump's timeline stays monotonic.
+    pub last_ts: u32,
+}
+
 /// How a destination already receives a track, so the hold's tags are
 /// framed exactly like the stream's own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,9 +224,8 @@ enum VideoTrack {
     Screen {
         shape: StreamShape,
         codec: SlateCodec,
-        /// The two IDR variants, then the P frames, in loop order.
-        keyframes: [Vec<u8>; 2],
-        deltas: Vec<Vec<u8>>,
+        /// The loop's keyframe intervals as tags, in play order.
+        intervals: Vec<Interval>,
     },
     HeldFrame(Arc<[u8]>),
 }
@@ -193,15 +235,22 @@ impl VideoTrack {
         let tag = |keyframe: bool, sample: &[u8]| {
             video_tag(target.framing, target.fourcc, keyframe, sample)
         };
+        let intervals = slate
+            .intervals
+            .iter()
+            .map(|interval| Interval {
+                keyframes: [0, 1].map(|replay| tag(true, &interval.keyframes[replay])),
+                deltas: interval
+                    .deltas
+                    .iter()
+                    .map(|sample| tag(false, sample))
+                    .collect(),
+            })
+            .collect();
         VideoTrack::Screen {
             shape: slate.shape,
             codec: target.codec,
-            keyframes: [0, 1].map(|replay| tag(true, &slate.keyframes[replay])),
-            deltas: slate
-                .deltas
-                .iter()
-                .map(|sample| tag(false, sample))
-                .collect(),
+            intervals,
         }
     }
 }
@@ -224,17 +273,72 @@ pub fn covers(ctrl: &Controller, dest: &DestinationState) -> bool {
     plan_for(ctrl, dest).is_ok()
 }
 
-/// Keep a reconnect loop encoded for each of `dest`'s video tracks.
-pub fn prebuild_for(ctrl: &Controller, dest: &DestinationState, settings: &CrashProtection) {
-    let Some(egress) = dest.video_egress() else {
-        return;
-    };
-    for (_, header) in video_headers_for(ctrl, egress) {
-        if let Some(target) = screen_target(&header) {
-            ctrl.slate_cache
-                .prebuild(settings, target.shape, target.codec);
-        }
+/// Keep a loop of the screen `settings` describe encoded in `cache` for
+/// each of `dest`'s video tracks. True when every one is ready already.
+pub fn prebuild_for(
+    ctrl: &Controller,
+    dest: &DestinationState,
+    cache: &Arc<SlateCache>,
+    settings: &CrashProtection,
+) -> bool {
+    let targets = screen_targets(ctrl, dest).unwrap_or_default();
+    prebuild_screens(cache, std::slice::from_ref(settings), &targets)
+}
+
+/// The shape and codec of each of `dest`'s video tracks a screen can
+/// stand in for: empty when none can (AV1, 10-bit HEVC), None before its
+/// video is known, when nothing can be built for it yet.
+pub fn screen_targets(
+    ctrl: &Controller,
+    dest: &DestinationState,
+) -> Option<Vec<(StreamShape, SlateCodec)>> {
+    let headers = video_headers_for(ctrl, dest.video_egress()?);
+    if headers.is_empty() {
+        return None;
     }
+    let targets = headers
+        .iter()
+        .filter_map(|(_, header)| screen_target(header))
+        .map(|target| (target.shape, target.codec))
+        .collect();
+    Some(targets)
+}
+
+/// Keep each of `screens` encoded in `cache` for every target, in order and
+/// one at a time: true once all are ready, false while one is building (the
+/// rest wait for the next call).
+pub fn prebuild_screens(
+    cache: &Arc<SlateCache>,
+    screens: &[CrashProtection],
+    targets: &[(StreamShape, SlateCodec)],
+) -> bool {
+    screens.iter().all(|settings| {
+        targets.iter().fold(true, |ready, &(shape, codec)| {
+            cache.prebuild(settings, shape, codec) && ready
+        })
+    })
+}
+
+/// Whether a delay transition can play for `dest`: it is on, and every
+/// video track the destination gets can show the screen. A track the
+/// screens can't stand in for (AV1, 10-bit HEVC) would sit on a frozen
+/// frame, so those destinations jump as they always have.
+pub fn transition_covers(ctrl: &Controller, dest: &DestinationState) -> bool {
+    ctrl.delay_transition().enabled && screens_cover(ctrl, dest)
+}
+
+/// Whether a delay going off or down can play the catch-up screen for
+/// `dest`, on the same terms as `transition_covers`.
+pub fn catch_up_covers(ctrl: &Controller, dest: &DestinationState) -> bool {
+    ctrl.delay_transition().catch_up && screens_cover(ctrl, dest)
+}
+
+fn screens_cover(ctrl: &Controller, dest: &DestinationState) -> bool {
+    plan_for(ctrl, dest).is_ok_and(|plan| {
+        plan.video
+            .iter()
+            .all(|source| matches!(source, VideoSource::Screen(_)))
+    })
 }
 
 /// Whether the hold may play this video tag's track by holding its last
@@ -464,48 +568,193 @@ pub async fn play(
         exit: HoldExit::Ended,
         last_ts: after_ts,
     };
+    let settings = ctrl.crash_protection();
+    let what = "crash protection";
+    let cache = (&ctrl.slate_cache, ScreenUse::Hold);
+    let Some(screen) = screen_for(ctrl, dest, cache, (&settings, what)).await else {
+        return Ok(ended);
+    };
+    ctrl.log(format!(
+        "[{}] crash protection: reconnect screen on air ({})",
+        dest.id,
+        describe(&screen.video)
+    ));
+    let mut rebuild: Option<Rebuild> = None;
+    let base = after_ts.wrapping_add(1);
+    let (exit, last_ts) = stream_loop(dest, sink, &screen, base, |_| {
+        hold_exit(ctrl, dest, &mut rebuild)
+    })
+    .await?;
+    Ok(HoldOutcome { exit, last_ts })
+}
+
+/// Where a delay transition's screen starts from.
+#[derive(Debug, Clone, Copy)]
+pub struct TransitionStart {
+    /// The last output timestamp the destination sent.
+    pub after_ts: u32,
+    /// A delay was on before this change, so going up raises it.
+    pub was_on: bool,
+    pub kind: TransitionKind,
+}
+
+/// Play one of the delay transition's screens into `dest` from `start`:
+/// a moment of screen, cut to straight from the stream.
+pub async fn play_transition(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    sink: &mut EgressSink,
+    start: TransitionStart,
+) -> io::Result<TransitionOutcome> {
+    let TransitionStart {
+        after_ts,
+        was_on,
+        kind,
+    } = start;
+    // The words name the delay being turned on (or down to): the target now.
+    let delay_ms = ctrl.target_delay_ms();
+    let (settings, what) = match kind {
+        TransitionKind::JumpBack => (
+            ctrl.transition_screen(delay_ms, was_on),
+            "the delay transition",
+        ),
+        TransitionKind::CatchUp => (ctrl.catch_up_screen(delay_ms), "the catch-up screen"),
+    };
+    let cache = (&ctrl.transition_cache, ScreenUse::Transition);
+    let unavailable = Ok(TransitionOutcome {
+        exit: TransitionExit::Unavailable,
+        last_ts: after_ts,
+    });
+    // Viewers' picture stops while the screen is fetched, so a screen
+    // still building is skipped, never waited on: the delay jumps as it
+    // would without the transition, and the build (its own task) carries
+    // on for the next change.
+    let fetch = screen_for(ctrl, dest, cache, (&settings, what));
+    let screen = match tokio::time::timeout(TRANSITION_SCREEN_WAIT, fetch).await {
+        Ok(Some(screen)) => screen,
+        Ok(None) => return unavailable,
+        Err(_) => {
+            ctrl.log(format!(
+                "[{}] {what} isn't ready yet: the delay jumps without it this time",
+                dest.id
+            ));
+            return unavailable;
+        }
+    };
+    ctrl.log(format!(
+        "[{}] {what}: screen on air ({})",
+        dest.id,
+        describe(&screen.video)
+    ));
+    let base = after_ts.wrapping_add(1);
+    let mut frames_aired = 0;
+    let (exit, last_ts) = stream_loop(dest, sink, &screen, base, |frames_sent| {
+        frames_aired = frames_sent;
+        transition_exit(ctrl, dest, frames_sent)
+    })
+    .await?;
+    // OBS went before a single screen frame went out: viewers never left
+    // the stream, so it carries on from where they are, as with no screen.
+    if frames_aired == 0 && matches!(exit, TransitionExit::Interrupted) {
+        return unavailable;
+    }
+    Ok(TransitionOutcome { exit, last_ts })
+}
+
+/// A screen ready to play into one destination: a track per video track it
+/// gets, and silence per AAC track.
+struct Screen {
+    video: Vec<VideoTrack>,
+    audio: Vec<SilentAudio>,
+}
+
+/// The screen `settings` describe, from `cache`, framed for `dest`.
+/// `None` (and a log line naming `what` it was for) when the destination
+/// can't be covered or the loop couldn't be built.
+async fn screen_for(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    (cache, screen_use): (&Arc<SlateCache>, ScreenUse),
+    (settings, what): (&CrashProtection, &str),
+) -> Option<Screen> {
     let plan = match plan_for(ctrl, dest) {
         Ok(plan) => plan,
         Err(why) => {
             ctrl.log(format!(
-                "[{}] crash protection can't cover this destination: {why}",
+                "[{}] {what} can't cover this destination: {why}",
                 dest.id
             ));
-            return Ok(ended);
+            return None;
         }
     };
-    let settings = ctrl.crash_protection();
     let mut video = Vec::with_capacity(plan.video.len());
     for source in plan.video {
         video.push(match source {
             VideoSource::Screen(target) => {
-                let built = ctrl
-                    .slate_cache
-                    .get(&settings, target.shape, target.codec)
+                let built = cache
+                    .for_screen(settings, (target.shape, target.codec), screen_use)
                     .await;
                 let Some(slate) = built else {
-                    ctrl.log(format!(
-                        "[{}] crash protection couldn't build the reconnect screen",
-                        dest.id
-                    ));
-                    return Ok(ended);
+                    ctrl.log(format!("[{}] {what} couldn't build its screen", dest.id));
+                    return None;
                 };
                 VideoTrack::screen(&slate, target)
             }
             VideoSource::HeldFrame(tag) => VideoTrack::HeldFrame(tag),
         });
     }
-    ctrl.log(format!(
-        "[{}] crash protection: reconnect screen on air ({})",
-        dest.id,
-        describe(&video)
-    ));
     // No sequence header: the loop's keyframes carry their own parameter
     // sets in-band under ids the stream doesn't use (see slate::encoder),
     // so the destination's decoder keeps the stream's config for the way
     // back.
-    let base = after_ts.wrapping_add(1);
-    stream_loop(ctrl, dest, sink, &video, &plan.audio, base).await
+    Some(Screen {
+        video,
+        audio: plan.audio,
+    })
+}
+
+/// When a hold's screen stops: the hold ended, or OBS is back and its new
+/// video covers the armed delay.
+fn hold_exit(
+    ctrl: &Controller,
+    dest: &DestinationState,
+    rebuild: &mut Option<Rebuild>,
+) -> Option<HoldExit> {
+    match ctrl.hold_state() {
+        _ if dest.shutdown_requested.load(Ordering::Relaxed) => Some(HoldExit::Ended),
+        HoldState::Holding => {
+            // OBS may drop again while the delay rebuilds: start over.
+            *rebuild = None;
+            None
+        }
+        // Back, then gone again without a new hold (a deliberate stop).
+        HoldState::Resumed if !ctrl.ingest_alive() => Some(HoldExit::Ended),
+        // With a delay armed the screen stays up until OBS's new video
+        // covers it, so viewers never see live.
+        HoldState::Resumed => {
+            let delay = u64::from(ctrl.target_delay_ms());
+            delay_rebuilt(ctrl, rebuild, delay)
+                .map(|rejoin_from_seq| HoldExit::Resumed { rejoin_from_seq })
+        }
+        HoldState::Ended => Some(HoldExit::Ended),
+    }
+}
+
+/// When a delay transition's screen stops: once `frames_sent` reaches its
+/// moment (`MOMENT_FRAMES`), to rejoin (the pump takes the keyframe the
+/// delay puts viewers on); or at once when OBS goes.
+fn transition_exit(
+    ctrl: &Controller,
+    dest: &DestinationState,
+    frames_sent: u64,
+) -> Option<TransitionExit> {
+    if dest.shutdown_requested.load(Ordering::Relaxed) {
+        return Some(TransitionExit::Ended);
+    }
+    if ctrl.obs_gone() || ctrl.hold_active() || !ctrl.ingest_alive() {
+        return Some(TransitionExit::Interrupted);
+    }
+    (frames_sent >= MOMENT_FRAMES).then_some(TransitionExit::Rejoin)
 }
 
 /// "2560x1440 HEVC, 1280x720 H.264, last keyframe held" for the log.
@@ -523,42 +772,25 @@ fn describe(video: &[VideoTrack]) -> String {
 }
 
 /// Send screen frames and silent audio, interleaved by timestamp and paced
-/// in real time, until OBS returns or the hold ends.
-async fn stream_loop(
-    ctrl: &Arc<Controller>,
+/// in real time from `base`, until `exit` (given the video frames sent so
+/// far) says why to stop. Answers that reason and the last output
+/// timestamp sent.
+async fn stream_loop<Exit>(
     dest: &Arc<DestinationState>,
     sink: &mut EgressSink,
-    video: &[VideoTrack],
-    audio: &[SilentAudio],
+    screen: &Screen,
     base: u32,
-) -> io::Result<HoldOutcome> {
+    mut exit: impl FnMut(u64) -> Option<Exit>,
+) -> io::Result<(Exit, u32)> {
+    let (video, audio) = (&screen.video, &screen.audio);
     let frame_ms = 1000.0 / SLATE_FPS as f64;
     let start = tokio::time::Instant::now();
     let mut video_index = 0u64;
     let mut audio_index = vec![0u64; audio.len()];
     let mut last_ts = base;
-    let mut rebuild: Option<Rebuild> = None;
     loop {
-        let exit = match ctrl.hold_state() {
-            _ if dest.shutdown_requested.load(Ordering::Relaxed) => Some(HoldExit::Ended),
-            HoldState::Holding => {
-                // OBS may drop again while the delay rebuilds: start over.
-                rebuild = None;
-                None
-            }
-            // Back, then gone again without a new hold (a deliberate stop).
-            HoldState::Resumed if !ctrl.ingest_alive() => Some(HoldExit::Ended),
-            // With a delay armed the screen stays up until OBS's new video
-            // covers it, so viewers never see live.
-            HoldState::Resumed => {
-                let delay = u64::from(ctrl.target_delay_ms());
-                delay_rebuilt(ctrl, &mut rebuild, delay)
-                    .map(|rejoin_from_seq| HoldExit::Resumed { rejoin_from_seq })
-            }
-            HoldState::Ended => Some(HoldExit::Ended),
-        };
-        if let Some(exit) = exit {
-            return Ok(HoldOutcome { exit, last_ts });
+        if let Some(reason) = exit(video_index) {
+            return Ok((reason, last_ts));
         }
         sink.drain_pings().await?;
 
@@ -580,7 +812,7 @@ async fn stream_loop(
             sink.send_audio(ts, &audio_tag(&audio[track])).await?;
             audio_index[track] += 1;
         } else {
-            for track in video {
+            for track in video.iter() {
                 let Some(tag) = video_frame(track, video_index) else {
                     continue;
                 };
@@ -633,21 +865,18 @@ pub(crate) fn delay_rebuilt(
 }
 
 /// The tag `track` sends for screen frame `index`, if any: every frame of
-/// the loop, or the held keyframe once a second.
+/// the loop in turn; or the held keyframe once a second.
 fn video_frame(track: &VideoTrack, index: u64) -> Option<&[u8]> {
     match track {
-        VideoTrack::Screen {
-            keyframes, deltas, ..
-        } => {
-            let frames = 1 + deltas.len() as u64;
-            let position = (index % frames) as usize;
-            if position == 0 {
+        VideoTrack::Screen { intervals, .. } => {
+            let per_interval = 1 + intervals[0].deltas.len() as u64;
+            let keyframes_sent = index / per_interval;
+            let interval = &intervals[(keyframes_sent % intervals.len() as u64) as usize];
+            match (index % per_interval) as usize {
                 // Alternate the two IDR variants: back-to-back IDRs must not
                 // share an idr_pic_id.
-                let replay = (index / frames) as usize % 2;
-                Some(&keyframes[replay])
-            } else {
-                Some(&deltas[position - 1])
+                0 => Some(&interval.keyframes[(keyframes_sent % 2) as usize]),
+                position => Some(&interval.deltas[position - 1]),
             }
         }
         VideoTrack::HeldFrame(tag) => index.is_multiple_of(HELD_FRAME_EVERY).then_some(&tag[..]),
@@ -697,32 +926,131 @@ fn audio_tag(audio: &SilentAudio) -> Vec<u8> {
     tag
 }
 
-/// Encoded reconnect-screen loops, one per destination shape and codec,
-/// rebuilt when the screen's look changes. Encoding a 1080p loop takes a
+/// Encoded screen loops, one per destination shape, codec and set of
+/// words, rebuilt when the screen's look changes. Encoding a 1080p loop takes a
 /// few hundred ms of one core, so loops are built ahead of time while OBS
 /// is live and a hold usually starts with one ready.
 #[derive(Default)]
 pub struct SlateCache {
-    /// Per (width, height, codec): the loop and the settings it was built
-    /// with.
-    ready: crate::sync::Mutex<HashMap<SlateKey, (CrashProtection, Arc<SlateLoop>)>>,
+    ready: crate::sync::Mutex<HashMap<SlateKey, Ready>>,
     building: crate::sync::Mutex<HashSet<SlateKey>>,
-}
-
-/// A slate loop's (width, height, codec).
-type SlateKey = (usize, usize, SlateCodec);
-
-fn slate_key(shape: StreamShape, codec: SlateCodec) -> SlateKey {
-    (shape.width, shape.height, codec)
+    /// Counts every ask, to tell which loop has gone unasked longest.
+    asks: std::sync::atomic::AtomicU64,
+    /// Loops the supervisor builds ahead right now (`keep_room_for`).
+    wanted: std::sync::atomic::AtomicUsize,
+    /// Whether this is the delay transition's (`SlateCache::for_transitions`).
+    transitions: bool,
 }
 
 impl SlateCache {
-    fn cached(&self, settings: &CrashProtection, key: SlateKey) -> Option<Arc<SlateLoop>> {
-        self.ready
-            .lock()
-            .get(&key)
-            .filter(|(built_with, _)| built_with.same_screen(settings))
-            .map(|(_, slate)| slate.clone())
+    /// A cache of the delay transition's screens, which play for a moment
+    /// and never loop: `MOMENT_FRAMES` pictures each, a fraction of a
+    /// loop's encode, so a style the streamer just picked is on stream
+    /// within seconds.
+    pub fn for_transitions() -> Self {
+        Self {
+            transitions: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// A loop built, with the settings it was built with and the ask it was
+/// last wanted at.
+struct Ready {
+    settings: CrashProtection,
+    slate: Arc<SlateLoop>,
+    last_asked: u64,
+}
+
+/// Loops kept per cache, at the least. The delay transition builds ahead
+/// one per screen (two) and likely delay (six, `Controller::transition_delays`)
+/// for each shape and codec the destinations get, plus a stand-in for each:
+/// 104 for about eight shapes (five Enhanced Broadcasting qualities, a
+/// vertical canvas and another destination's). A setup with more says so
+/// (`SlateCache::keep_room_for`), or the supervisor would build the same
+/// screens over and over. Past it, the loop unasked for longest goes: one
+/// drawn with words edited since, or for a delay turned on once.
+const MOST_LOOPS: usize = 128;
+
+/// What tells loops apart: the shape, the codec, the theme (so a soft
+/// theme's stand-in and the soft loop itself can be built side by side)
+/// and the words (so a delay transition keeps a loop per delay it names).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SlateKey {
+    width: usize,
+    height: usize,
+    codec: SlateCodec,
+    theme: SlateTheme,
+    words: (String, String),
+}
+
+fn slate_key(settings: &CrashProtection, shape: StreamShape, codec: SlateCodec) -> SlateKey {
+    SlateKey {
+        width: shape.width,
+        height: shape.height,
+        codec,
+        theme: settings.theme,
+        words: (settings.headline.clone(), settings.subline.clone()),
+    }
+}
+
+impl SlateCache {
+    fn cached(&self, settings: &CrashProtection, key: &SlateKey) -> Option<Arc<SlateLoop>> {
+        let ask = self.asks.fetch_add(1, Ordering::Relaxed);
+        let mut ready = self.ready.lock();
+        let entry = ready
+            .get_mut(key)
+            .filter(|entry| entry.settings.same_screen(settings))?;
+        entry.last_asked = ask;
+        Some(entry.slate.clone())
+    }
+
+    /// Room for `loops` built ahead, each with its stand-in, above the
+    /// usual `MOST_LOOPS`: so a setup with many shapes keeps every screen
+    /// it builds instead of trading one for another on every pass.
+    pub fn keep_room_for(&self, loops: usize) {
+        self.wanted.store(loops, Ordering::Relaxed);
+    }
+
+    /// How many loops are kept before the one unasked longest goes.
+    fn room(&self) -> usize {
+        let wanted = self.wanted.load(Ordering::Relaxed).saturating_mul(2);
+        MOST_LOOPS.max(wanted + wanted / 4)
+    }
+
+    /// Drop every loop not drawn for `settings`' screen or its stand-in
+    /// (the crash screen was edited): only those two are ever played, and
+    /// each edit made while live would otherwise keep another loop per
+    /// shape for the rest of the session.
+    pub fn keep_only_for(&self, settings: &CrashProtection) {
+        let words = (settings.headline.clone(), settings.subline.clone());
+        let stand_in = settings.theme.quick_stand_in();
+        self.ready.lock().retain(|key, _| {
+            key.words == words && (key.theme == settings.theme || Some(key.theme) == stand_in)
+        });
+    }
+
+    fn keep(&self, key: SlateKey, settings: CrashProtection, slate: Arc<SlateLoop>) {
+        let last_asked = self.asks.fetch_add(1, Ordering::Relaxed);
+        let mut ready = self.ready.lock();
+        if ready.len() >= self.room() && !ready.contains_key(&key) {
+            let unasked_longest = ready
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_asked)
+                .map(|(key, _)| key.clone());
+            if let Some(gone) = unasked_longest {
+                ready.remove(&gone);
+            }
+        }
+        ready.insert(
+            key,
+            Ready {
+                settings,
+                slate,
+                last_asked,
+            },
+        );
     }
 
     /// The loop for `shape` in `codec`, building it now if it isn't
@@ -735,13 +1063,24 @@ impl SlateCache {
         shape: StreamShape,
         codec: SlateCodec,
     ) -> Option<Arc<SlateLoop>> {
+        self.get_or_build(settings, shape, codec, Urgency::Now)
+            .await
+    }
+
+    async fn get_or_build(
+        self: &Arc<Self>,
+        settings: &CrashProtection,
+        shape: StreamShape,
+        codec: SlateCodec,
+        urgency: Urgency,
+    ) -> Option<Arc<SlateLoop>> {
         const BUILD_POLL: Duration = Duration::from_millis(50);
-        let key = slate_key(shape, codec);
+        let key = slate_key(settings, shape, codec);
         loop {
-            if let Some(slate) = self.cached(settings, key) {
+            if let Some(slate) = self.cached(settings, &key) {
                 return Some(slate);
             }
-            if self.building.lock().insert(key) {
+            if self.building.lock().insert(key.clone()) {
                 break;
             }
             tokio::time::sleep(BUILD_POLL).await;
@@ -752,9 +1091,9 @@ impl SlateCache {
         let cache = self.clone();
         let settings = settings.clone();
         let task = tokio::spawn(async move {
-            let slate = build(settings.clone(), shape, codec).await;
+            let slate = build(settings.clone(), (shape, codec), urgency, cache.transitions).await;
             if let Some(slate) = &slate {
-                cache.ready.lock().insert(key, (settings, slate.clone()));
+                cache.keep(key.clone(), settings, slate.clone());
             }
             cache.building.lock().remove(&key);
             slate
@@ -762,23 +1101,70 @@ impl SlateCache {
         task.await.ok().flatten()
     }
 
+    /// The loop to play now. A style that isn't ready plays the flat
+    /// stand-in instead, in the same colours and words and built in a
+    /// fraction of a second: for a hold, a soft style (seconds to build),
+    /// which goes on building for the next hold; for a delay transition,
+    /// any style, as the stream waits on the screen. The supervisor builds
+    /// a transition's screens for the delays likely to come (an unplanned
+    /// one may never come again).
+    pub async fn for_screen(
+        self: &Arc<Self>,
+        settings: &CrashProtection,
+        (shape, codec): (StreamShape, SlateCodec),
+        screen_use: ScreenUse,
+    ) -> Option<Arc<SlateLoop>> {
+        let stand_in = match screen_use {
+            ScreenUse::Hold => settings.theme.quick_stand_in(),
+            ScreenUse::Transition => {
+                Some(SlateTheme::STAND_IN).filter(|stand_in| *stand_in != settings.theme)
+            }
+        };
+        let Some(stand_in) = stand_in else {
+            return self.get(settings, shape, codec).await;
+        };
+        if let Some(slate) = self.cached(settings, &slate_key(settings, shape, codec)) {
+            return Some(slate);
+        }
+        if screen_use == ScreenUse::Hold {
+            self.prebuild(settings, shape, codec);
+        }
+        let quick = CrashProtection {
+            theme: stand_in,
+            ..settings.clone()
+        };
+        self.get(&quick, shape, codec).await
+    }
+
     /// Start building the loop for `shape` in `codec` in the background,
-    /// unless it is ready or already being built.
+    /// unless it is ready or already being built. A soft theme's loop
+    /// builds quietly: nothing waits on it (a hold plays its stand-in
+    /// meanwhile), and the streamer is usually live while it builds. True
+    /// when it is ready.
     pub fn prebuild(
         self: &Arc<Self>,
         settings: &CrashProtection,
         shape: StreamShape,
         codec: SlateCodec,
-    ) {
-        let key = slate_key(shape, codec);
-        if self.cached(settings, key).is_some() || self.building.lock().contains(&key) {
-            return;
+    ) -> bool {
+        let key = slate_key(settings, shape, codec);
+        if self.cached(settings, &key).is_some() {
+            return true;
         }
+        if self.building.lock().contains(&key) {
+            return false;
+        }
+        let urgency = if settings.theme.is_soft() {
+            Urgency::Quietly
+        } else {
+            Urgency::Now
+        };
         let cache = self.clone();
         let settings = settings.clone();
         tokio::spawn(async move {
-            cache.get(&settings, shape, codec).await;
+            cache.get_or_build(&settings, shape, codec, urgency).await;
         });
+        false
     }
 
     /// Drop every loop (crash protection was switched off).
@@ -787,16 +1173,54 @@ impl SlateCache {
     }
 }
 
-/// Encode a loop off the async runtime.
+/// What a screen is asked for, which decides what plays while its style
+/// is still being built (`SlateCache::for_screen`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenUse {
+    /// A crash-protection hold.
+    Hold,
+    /// A delay transition: the stream waits on the screen.
+    Transition,
+}
+
+/// How soon a loop is needed.
+#[derive(Debug, Clone, Copy)]
+enum Urgency {
+    /// Something waits on it: every core it can use.
+    Now,
+    /// Nothing waits: one core, and one such build at a time.
+    Quietly,
+}
+
+/// Held by the quiet build running now, so a crash loop and a transition
+/// loop (or two destinations' sizes) never build side by side.
+static QUIET_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Encode a loop off the async runtime; for a delay transition
+/// (`for_transition`), only the moment it plays.
 async fn build(
     settings: CrashProtection,
-    shape: StreamShape,
-    codec: SlateCodec,
+    (shape, codec): (StreamShape, SlateCodec),
+    urgency: Urgency,
+    for_transition: bool,
 ) -> Option<Arc<SlateLoop>> {
     tokio::task::spawn_blocking(move || {
-        crate::slate::build_loop(&settings, shape, codec)
-            .ok()
-            .map(Arc::new)
+        let encode = || match (for_transition, urgency) {
+            (true, _) => {
+                crate::slate::build_moment(&settings, shape, codec, MOMENT_FRAMES as usize)
+            }
+            (false, Urgency::Now) => crate::slate::build_loop(&settings, shape, codec),
+            (false, Urgency::Quietly) => crate::slate::build_loop_quietly(&settings, shape, codec),
+        };
+        let built = match urgency {
+            Urgency::Now => encode(),
+            Urgency::Quietly => {
+                // A build that panicked held it last; the lock guards no data.
+                let _turn = QUIET_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+                encode()
+            }
+        };
+        built.ok().map(Arc::new)
     })
     .await
     .ok()
@@ -999,6 +1423,211 @@ mod tests {
         let later = cache.get(&settings, shape, SlateCodec::H264);
         let later = tokio::time::timeout(Duration::from_secs(10), later);
         assert!(later.await.expect("not wedged").is_some());
+    }
+
+    /// OBS drops before the soft loop is built: the hold must not wait for
+    /// it. It gets the flat stand-in (one 2 s interval) at once, the soft
+    /// loop finishes building beside it, and the next hold gets that one.
+    #[tokio::test]
+    async fn a_soft_screen_not_yet_built_stands_in_flat() {
+        let cache = Arc::new(SlateCache::default());
+        let settings = CrashProtection {
+            theme: SlateTheme::Halo,
+            ..CrashProtection::default()
+        };
+        let shape = StreamShape {
+            width: 320,
+            height: 180,
+            fps: SLATE_FPS,
+        };
+        let target = (shape, SlateCodec::Hevc);
+        let first = cache.for_screen(&settings, target, ScreenUse::Hold).await;
+        assert_eq!(first.expect("a loop to play").intervals.len(), 1);
+        let soft = tokio::time::timeout(
+            Duration::from_secs(30),
+            cache.get(&settings, shape, SlateCodec::Hevc),
+        );
+        assert!(soft.await.expect("the soft build finishes").is_some());
+        let next = cache.for_screen(&settings, target, ScreenUse::Hold).await;
+        let intervals = SlateTheme::Halo.loop_intervals();
+        assert_eq!(next.expect("a loop to play").intervals.len(), intervals);
+    }
+
+    /// A delay transition to a delay nobody planned for plays the stand-in
+    /// and builds nothing more: the supervisor builds the likely delays.
+    /// A transition never waits on a style that isn't built, soft or not:
+    /// it plays the stand-in, and leaves building the style to the
+    /// supervisor.
+    #[tokio::test]
+    async fn a_transition_stands_in_for_any_style_not_built() {
+        let shape = StreamShape {
+            width: 320,
+            height: 180,
+            fps: SLATE_FPS,
+        };
+        for theme in [SlateTheme::Halo, SlateTheme::Halftone] {
+            let cache = Arc::new(SlateCache::for_transitions());
+            let settings = CrashProtection {
+                theme,
+                ..CrashProtection::default()
+            };
+            let played = cache
+                .for_screen(&settings, (shape, SlateCodec::H264), ScreenUse::Transition)
+                .await;
+            assert!(played.is_some(), "{theme:?}: a screen to play");
+            assert!(
+                cache.building.lock().is_empty(),
+                "{theme:?}: no build left running"
+            );
+            let key = slate_key(&settings, shape, SlateCodec::H264);
+            assert!(
+                cache.cached(&settings, &key).is_none(),
+                "{theme:?} not built"
+            );
+            let stand_in = CrashProtection {
+                theme: SlateTheme::STAND_IN,
+                ..settings
+            };
+            let stand_in_key = slate_key(&stand_in, shape, SlateCodec::H264);
+            assert!(
+                cache.cached(&stand_in, &stand_in_key).is_some(),
+                "{theme:?}"
+            );
+        }
+    }
+
+    /// Each set of words keeps its own loop, so a screen per delay can be
+    /// ready at once; past `MOST_LOOPS` the one unasked for longest goes.
+    #[tokio::test]
+    async fn loops_are_kept_per_words_and_the_unasked_go_first() {
+        let cache = Arc::new(SlateCache::default());
+        let shape = StreamShape {
+            width: 64,
+            height: 64,
+            fps: SLATE_FPS,
+        };
+        let worded = |headline: String| CrashProtection {
+            theme: SlateTheme::Whisper,
+            headline,
+            ..CrashProtection::default()
+        };
+        let slate = cache
+            .get(&worded("Going back 30 s".into()), shape, SlateCodec::H264)
+            .await
+            .expect("a loop");
+        cache
+            .get(&worded("Going back 1 min".into()), shape, SlateCodec::H264)
+            .await
+            .expect("a loop");
+        let first = worded("Going back 30 s".into());
+        let first_key = slate_key(&first, shape, SlateCodec::H264);
+        assert!(cache.cached(&first, &first_key).is_some(), "both kept");
+        // Fill the cache, asking for the first loop all along.
+        for n in 0..MOST_LOOPS {
+            let settings = worded(format!("Delay {n}"));
+            cache.keep(
+                slate_key(&settings, shape, SlateCodec::H264),
+                settings,
+                slate.clone(),
+            );
+            assert!(
+                cache.cached(&first, &first_key).is_some(),
+                "asked for: kept"
+            );
+        }
+        assert_eq!(cache.ready.lock().len(), MOST_LOOPS);
+        let second = worded("Going back 1 min".into());
+        let second_key = slate_key(&second, shape, SlateCodec::H264);
+        assert!(
+            cache.cached(&second, &second_key).is_none(),
+            "unasked: gone"
+        );
+    }
+
+    /// A setup that builds more screens ahead than `MOST_LOOPS` keeps every
+    /// one of them, so none is rebuilt pass after pass.
+    #[tokio::test]
+    async fn room_grows_with_the_screens_built_ahead() {
+        let cache = Arc::new(SlateCache::default());
+        let shape = StreamShape {
+            width: 64,
+            height: 64,
+            fps: SLATE_FPS,
+        };
+        let worded = |n: usize| CrashProtection {
+            theme: SlateTheme::Whisper,
+            headline: format!("Delay {n}"),
+            ..CrashProtection::default()
+        };
+        let slate = cache
+            .get(&worded(0), shape, SlateCodec::H264)
+            .await
+            .expect("a loop");
+        let wanted = MOST_LOOPS; // Twice that with stand-ins: past the floor.
+        cache.keep_room_for(wanted);
+        for n in 1..2 * wanted {
+            let settings = worded(n);
+            cache.keep(
+                slate_key(&settings, shape, SlateCodec::H264),
+                settings,
+                slate.clone(),
+            );
+        }
+        assert_eq!(cache.ready.lock().len(), 2 * wanted, "every one kept");
+    }
+
+    /// Editing the crash screen drops the loops drawn with its old words or
+    /// style, and keeps its own and its stand-in's.
+    #[tokio::test]
+    async fn an_edited_crash_screen_drops_its_old_loops() {
+        let cache = Arc::new(SlateCache::default());
+        let shape = StreamShape {
+            width: 64,
+            height: 64,
+            fps: SLATE_FPS,
+        };
+        let screen = |theme, headline: &str| CrashProtection {
+            theme,
+            headline: headline.into(),
+            ..CrashProtection::default()
+        };
+        let halo = SlateTheme::Halo;
+        let slate = cache
+            .get(
+                &screen(SlateTheme::Whisper, "Back soon"),
+                shape,
+                SlateCodec::H264,
+            )
+            .await
+            .expect("a loop");
+        let stand_in = halo.quick_stand_in().unwrap_or(SlateTheme::STAND_IN);
+        for settings in [
+            screen(halo, "Back soon"),
+            screen(stand_in, "Back soon"),
+            screen(halo, "Old words"),
+            screen(SlateTheme::Arcade, "Back soon"),
+        ] {
+            cache.keep(
+                slate_key(&settings, shape, SlateCodec::H264),
+                settings,
+                slate.clone(),
+            );
+        }
+        let current = screen(halo, "Back soon");
+        cache.keep_only_for(&current);
+        let mut kept: Vec<_> = cache
+            .ready
+            .lock()
+            .keys()
+            .map(|key| (key.theme, key.words.0.clone()))
+            .collect();
+        kept.sort_by_key(|(theme, _)| format!("{theme:?}"));
+        let mut expected = vec![(halo, "Back soon".to_string())];
+        if let Some(theme) = halo.quick_stand_in() {
+            expected.push((theme, "Back soon".to_string()));
+        }
+        expected.sort_by_key(|(theme, _)| format!("{theme:?}"));
+        assert_eq!(kept, expected);
     }
 
     /// OBS is back, but its new video comes in too slowly to span the

@@ -737,6 +737,15 @@ pub struct Controller {
     hold: crate::sync::Mutex<Option<crate::crash_hold::Hold>>,
     /// Encoded reconnect-screen loops, shared by every destination.
     pub slate_cache: Arc<crate::crash_hold::SlateCache>,
+    /// The delay transition settings. See `crate::delay_transition`.
+    delay_transition: crate::sync::Mutex<crate::delay_transition::DelayTransition>,
+    /// Encoded delay-transition screens (only the moment each plays),
+    /// kept apart from the reconnect screen's so neither pushes the other
+    /// out.
+    pub transition_cache: Arc<crate::crash_hold::SlateCache>,
+    /// Whether the delay transition's screens for the saved settings are
+    /// encoded for every live destination (`SCREENS_*`), for the dashboard.
+    transition_screens: AtomicU8,
     /// The latest keyframe of each track the reconnect screen can't
     /// replace (HEVC, AV1), keyed like `video_seq_headers`: a hold re-sends
     /// it instead. See `crash_hold::is_held_keyframe`.
@@ -928,6 +937,11 @@ pub struct Controller {
     state_dirty: Notify,
 }
 
+/// `Controller::transition_screens` values.
+const SCREENS_UNKNOWN: u8 = 0;
+const SCREENS_BUILDING: u8 = 1;
+const SCREENS_READY: u8 = 2;
+
 impl Controller {
     pub fn new(ring: Arc<DiskRing>, initial_armed_delay_ms: u32) -> Self {
         // Match arm_delay's clamp, so a hand-edited config can't arm past
@@ -961,6 +975,9 @@ impl Controller {
             crash_protection_on: AtomicBool::new(false),
             hold: crate::sync::Mutex::new(None),
             slate_cache: Arc::default(),
+            delay_transition: crate::sync::Mutex::new(Default::default()),
+            transition_cache: Arc::new(crate::crash_hold::SlateCache::for_transitions()),
+            transition_screens: AtomicU8::new(SCREENS_UNKNOWN),
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
             rate_in: RateMeter::default(),
@@ -1380,6 +1397,15 @@ impl Controller {
                 .write()
                 .retain(|id, _| active.contains(id));
         }
+    }
+
+    /// A destination's state if it has one. Read-only, for readers like
+    /// `/state` that list disabled destinations too: registering one there
+    /// counted a destination with no pump in the header's "0/2 live" until
+    /// the supervisor's next sweep dropped it, and the count flickered
+    /// between the two.
+    pub fn existing_destination_state(&self, id: &str) -> Option<Arc<DestinationState>> {
+        self.destinations.read().get(id).cloned()
     }
 
     /// Why a destination's last attempt failed, if it did. Read-only: unlike
@@ -2227,7 +2253,10 @@ impl Controller {
                         self.mark_replay_floor();
                     }
                 }
-                if is_idr {
+                // The main track's keyframes only: with Enhanced
+                // Broadcasting each quality sends its own, a few ms apart,
+                // and counting those read a 2 s interval as about 0.8 s.
+                if is_idr && crate::h264::seq_header_track_id(payload) == 0 {
                     self.sample_keyframe_interval(ts_ms);
                 }
             }
@@ -2639,6 +2668,8 @@ impl Controller {
             }
             self.held_keyframes.lock().clear();
             self.slate_cache.clear();
+        } else {
+            self.slate_cache.keep_only_for(&settings);
         }
         *self.crash_protection.lock() = settings;
     }
@@ -2658,6 +2689,78 @@ impl Controller {
 
     pub fn crash_protection(&self) -> crate::crash_protection::CrashProtection {
         self.crash_protection.lock().clone()
+    }
+
+    /// Mirror the delay transition settings (the supervisor calls this).
+    /// With both its screens off, their loops are dropped.
+    pub fn update_delay_transition(&self, settings: crate::delay_transition::DelayTransition) {
+        if !settings.any_screen() {
+            self.transition_cache.clear();
+        }
+        *self.delay_transition.lock() = settings;
+    }
+
+    /// Whether the delay transition's screens are encoded for every live
+    /// destination: `None` while they aren't being kept (no screen on, or
+    /// OBS isn't live), else ready or not yet.
+    pub fn transition_screens_ready(&self) -> Option<bool> {
+        match self.transition_screens.load(Ordering::Relaxed) {
+            SCREENS_READY => Some(true),
+            SCREENS_BUILDING => Some(false),
+            _ => None,
+        }
+    }
+
+    /// The supervisor's verdict for `transition_screens_ready`.
+    pub fn set_transition_screens_ready(&self, ready: Option<bool>) {
+        let value = match ready {
+            Some(true) => SCREENS_READY,
+            Some(false) => SCREENS_BUILDING,
+            None => SCREENS_UNKNOWN,
+        };
+        self.transition_screens.store(value, Ordering::Relaxed);
+    }
+
+    pub fn delay_transition(&self) -> crate::delay_transition::DelayTransition {
+        self.delay_transition.lock().clone()
+    }
+
+    /// The screen a delay transition to `delay_ms` plays; `was_on`: from a
+    /// delay already on, so it raises it.
+    pub fn transition_screen(
+        &self,
+        delay_ms: u32,
+        was_on: bool,
+    ) -> crate::crash_protection::CrashProtection {
+        self.delay_transition().screen(delay_ms, was_on)
+    }
+
+    /// The screen a delay going off or down to `delay_ms` plays.
+    pub fn catch_up_screen(&self, delay_ms: u32) -> crate::crash_protection::CrashProtection {
+        self.delay_transition().catch_up_screen(delay_ms)
+    }
+
+    /// The delays worth having a transition screen built for ahead of
+    /// time, the likeliest first: the armed one, then each profile's (a
+    /// press away). Just one when the screen's words don't name the delay,
+    /// as every delay then draws the same screen.
+    pub fn transition_delays(&self, profiles: &[crate::config::DelayProfile]) -> Vec<u32> {
+        let armed = self.armed_delay_ms();
+        if !self.delay_transition().names_the_delay() {
+            return vec![armed];
+        }
+        likely_delays(armed, profiles, |delay_ms| delay_ms > 0)
+    }
+
+    /// The same for the catch-up screen: no delay first (a delay turned
+    /// off), then each profile's below the delay on or armed (a delay
+    /// lowered to it; one above it is reached by going up).
+    pub fn catch_up_delays(&self, profiles: &[crate::config::DelayProfile]) -> Vec<u32> {
+        if !self.delay_transition().catch_up_names_the_delay() {
+            return vec![0];
+        }
+        let highest = self.target_delay_ms().max(self.armed_delay_ms());
+        likely_delays(0, profiles, |delay_ms| delay_ms == 0 || delay_ms < highest)
     }
 
     /// Whether destinations are being held on the reconnect screen now.
@@ -3598,6 +3701,9 @@ async fn pump_dest(
         return Ok(());
     };
     state.consumer_seq = first_idr.seq;
+    // Read after any hold above (the streamer may have changed the delay
+    // while the screen was up).
+    state.landed_delay_ms = delay_at(ctrl, &first_idr);
     state.input_ts_anchor = first_idr.ts_ms;
     state.output_ts_base = resume_after_ts.map_or(0, |ts| ts.wrapping_add(1));
     state.wall_anchor = Instant::now();
@@ -3805,8 +3911,67 @@ async fn pump_dest(
                 // fresh, so the cut lands on this same iteration.
                 ctrl.maybe_fire_safe_cut();
                 if let Some(cut) = compute_delay_cut(ctrl, &meta) {
+                    // A delay turned on or raised takes viewers back in
+                    // time; one turned off or lowered takes them forward.
+                    // With the transition's screen for that jump on, they
+                    // see it for a moment from right here, then the stream
+                    // where the delay puts them. Only for the streamer's
+                    // change: a cut for the delay already landed on puts a
+                    // slipped delay right, with no screen.
+                    use crate::crash_hold::{catch_up_covers, transition_covers, TransitionKind};
+                    let goes_back = cut.target.seq < meta.seq;
+                    let target = ctrl.target_delay_ms();
+                    let (raised, lowered) = (
+                        target > state.landed_delay_ms,
+                        target < state.landed_delay_ms,
+                    );
+                    // With OBS gone the delay's tail plays out as it does
+                    // without the transition: a screen would end at once.
+                    let obs_here = ctrl.ingest_alive() && !ctrl.obs_gone() && !ctrl.hold_active();
+                    let screen = if !obs_here {
+                        None
+                    } else if goes_back && raised && transition_covers(ctrl, dest) {
+                        Some(TransitionKind::JumpBack)
+                    } else if !goes_back && lowered && catch_up_covers(ctrl, dest) {
+                        Some(TransitionKind::CatchUp)
+                    } else {
+                        None
+                    };
+                    crate::trace::log(
+                        "DELAY_CUT",
+                        &format!(
+                            "dest={} screen={screen:?} target={target} landed={} delay={} \
+                             cut_to_delay={} keyframe_interval={}",
+                            dest.id,
+                            state.landed_delay_ms,
+                            ctrl.ring
+                                .latest_ts()
+                                .unwrap_or(0)
+                                .saturating_sub(meta.ts_ms),
+                            ctrl.ring
+                                .latest_ts()
+                                .unwrap_or(0)
+                                .saturating_sub(cut.target.ts_ms),
+                            ctrl.keyframe_interval_ms(),
+                        ),
+                    );
+                    if let Some(kind) = screen {
+                        match play_transition(ctrl, dest, &mut sink, &mut state, (meta, kind))
+                            .await?
+                        {
+                            Transition::Played => continue,
+                            Transition::Ended => return Ok(()),
+                            Transition::Unavailable => {}
+                        }
+                    }
                     apply_cut(ctrl, dest, &mut sink, &mut state, cut).await?;
                     continue;
+                }
+                // No cut: a change small enough to sit inside the dead
+                // band has landed as it is, so a later drift fix isn't
+                // taken for it. One still waiting on the buffer has not.
+                if delay_has_landed(ctrl, &meta) {
+                    state.landed_delay_ms = ctrl.target_delay_ms();
                 }
             }
             pace_and_send(&mut sink, &mut state, &meta, ctrl, dest, &mut io_buf).await?;
@@ -3815,6 +3980,118 @@ async fn pump_dest(
         // current_delay_ms is derived server-side now (see Controller),
         // so pumps don't race to overwrite it.
     }
+}
+
+/// `first`, then each profile's delay that `keep` takes, once each and at
+/// most a handful: each is a screen encoded in the background while live,
+/// for every quality the stream sends, and a handful covers the profiles a
+/// streamer keeps.
+fn likely_delays(
+    first: u32,
+    profiles: &[crate::config::DelayProfile],
+    keep: impl Fn(u32) -> bool,
+) -> Vec<u32> {
+    const MOST: usize = 6;
+    let mut delays: Vec<u32> = Vec::with_capacity(MOST);
+    let likely = std::iter::once(first).chain(profiles.iter().map(|profile| profile.delay_ms));
+    for delay_ms in likely.filter(|delay_ms| keep(*delay_ms)) {
+        if delays.len() < MOST && !delays.contains(&delay_ms) {
+            delays.push(delay_ms);
+        }
+    }
+    delays
+}
+
+/// How a delay transition went, as the pump carries on from it.
+enum Transition {
+    /// The screen played and the pump rejoined the stream.
+    Played,
+    /// No screen could be put on air: nothing was sent, so jump instead.
+    Unavailable,
+    /// The destination's session ended.
+    Ended,
+}
+
+/// Play a delay transition screen from where viewers are (`paused`, the
+/// tag this pump would send next) for a moment, then rejoin the stream on
+/// the keyframe the delay puts viewers on, as a cut would.
+async fn play_transition(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    sink: &mut EgressSink,
+    state: &mut EgressState,
+    (paused, kind): (TagMeta, crate::crash_hold::TransitionKind),
+) -> io::Result<Transition> {
+    use crate::crash_hold::TransitionExit;
+    let screen_from = crate::crash_hold::TransitionStart {
+        after_ts: last_output_ts(state),
+        was_on: state.landed_delay_ms > 0,
+        kind,
+    };
+    let outcome = crate::crash_hold::play_transition(ctrl, dest, sink, screen_from).await?;
+    // Interrupted, the pump is still at the delay it had: the change it
+    // was turning on has not landed.
+    let interrupted = matches!(outcome.exit, TransitionExit::Interrupted);
+    let landed_before = state.landed_delay_ms;
+    let rejoin = match outcome.exit {
+        TransitionExit::Unavailable => return Ok(Transition::Unavailable),
+        TransitionExit::Ended => {
+            let _ = sink.send_delete_stream().await;
+            return Ok(Transition::Ended);
+        }
+        // Where the delay (as it is now) puts viewers; with nowhere to go
+        // (the buffer short of it), on from where they paused.
+        TransitionExit::Rejoin => match screen_rejoin_idr(ctrl, &paused) {
+            Some(idr) => Some(idr),
+            None => rejoin_idr(ctrl, dest, paused.seq).await,
+        },
+        // OBS went away mid-screen: on from the next keyframe after where
+        // viewers paused, and the pump's own paths carry on from there
+        // (airing what the delay holds, then the reconnect screen if one
+        // covers it). With no keyframe after it yet (a delay shorter than
+        // a keyframe interval), from the one before: up to an interval
+        // seen again, so the last moments before OBS went still decode
+        // instead of being dropped.
+        TransitionExit::Interrupted => ctrl
+            .ring
+            .oldest_idr_at_or_after(paused.seq)
+            .or_else(|| ctrl.ring.newest_idr_at_or_before(paused.ts_ms)),
+    };
+    // Continue the timeline from the last screen frame, so the rejoin's
+    // re-anchor stays strictly after it.
+    state.output_ts_base = outcome.last_ts;
+    state.input_ts_anchor = state.last_sent_input_ts;
+    let Some(idr) = rejoin else {
+        let _ = sink.send_delete_stream().await;
+        return Ok(Transition::Ended);
+    };
+    let back = match ctrl.target_delay_ms() {
+        0 => "live",
+        _ => "delayed",
+    };
+    ctrl.log(format!(
+        "[{}] delay transition done - back on the stream, {back}",
+        dest.id
+    ));
+    let from = (state.consumer_seq, state.last_sent_input_ts);
+    let before_base = state.output_ts_base;
+    rejoin_at(ctrl, dest, sink, state, idr).await?;
+    note_cut(ctrl, dest, from, &idr, (before_base, state.output_ts_base));
+    if interrupted {
+        state.landed_delay_ms = landed_before;
+    }
+    crate::trace::log(
+        "DELAY_REJOIN",
+        &format!(
+            "dest={} target={} landed={} delay={} keyframe_interval={}",
+            dest.id,
+            ctrl.target_delay_ms(),
+            state.landed_delay_ms,
+            ctrl.ring.latest_ts().unwrap_or(0).saturating_sub(idr.ts_ms),
+            ctrl.keyframe_interval_ms(),
+        ),
+    );
+    Ok(Transition::Played)
 }
 
 /// Output timestamp of the last tag this pump sent.
@@ -3844,6 +4121,7 @@ async fn rejoin_at(
     idr: TagMeta,
 ) -> io::Result<()> {
     reseed_after_publisher_change(state, idr);
+    state.landed_delay_ms = delay_at(ctrl, &idr);
     send_sequence_headers(ctrl, dest, sink, state.output_ts_base).await?;
     dest.consumer_seq
         .store(state.consumer_seq, Ordering::Relaxed);
@@ -3907,6 +4185,11 @@ struct EgressState {
     // --- cut-check throttling ---
     last_cut_check: Instant,
     last_seen_target: u32,
+    /// The delay this pump last landed on (its join, a cut, a rejoin). A
+    /// cut toward another delay is the streamer's change and may play the
+    /// delay transition; one toward the same delay puts a slipped delay
+    /// right.
+    landed_delay_ms: u32,
     /// Vertical egress only: after a (re)seed we may be pointed mid-GOP of
     /// the vertical canvas (the cut/seed index is built from the HORIZONTAL
     /// primary's keyframes). Emitting the vertical canvas's P-frames before
@@ -3929,6 +4212,7 @@ impl EgressState {
             last_publisher_token: 0,
             last_cut_check: now,
             last_seen_target: 0,
+            landed_delay_ms: 0,
             awaiting_keyframe: true,
         }
     }
@@ -4293,6 +4577,83 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
     (target.seq > current.seq).then_some(PendingCut { target })
 }
 
+/// Whether a delay of `current_delay` is (too little, too much) for
+/// `target_delay`, outside the window a landed delay sits in.
+fn delay_off_by(ctrl: &Controller, current_delay: u64, target_delay: u64) -> (bool, bool) {
+    let keyframe_interval = ctrl.keyframe_interval_ms();
+    let gop = match keyframe_interval {
+        0 => DEFAULT_KEYFRAME_INTERVAL_MS,
+        measured => u64::from(measured),
+    };
+    let too_little = current_delay + DELAY_JITTER_MS < target_delay;
+    let upper_band = recut_dead_band_ms(keyframe_interval).max(gop + DELAY_JITTER_MS);
+    let too_much = current_delay > target_delay + upper_band;
+    (too_little, too_much)
+}
+
+/// Whether the pump at `current` already sits where the delay on now puts
+/// it, so no cut is due for it (as `compute_delay_cut` judges). On a full
+/// ring that is as far back as the ring reaches (`reachable_delay`).
+fn delay_has_landed(ctrl: &Controller, current: &TagMeta) -> bool {
+    let Some(latest) = ctrl.ring.latest_ts() else {
+        return false;
+    };
+    let current_delay = latest.saturating_sub(current.ts_ms);
+    match u64::from(ctrl.target_delay_ms()) {
+        0 => current_delay < recut_dead_band_ms(ctrl.keyframe_interval_ms()),
+        target_delay => {
+            let goal = reachable_delay(ctrl, latest, target_delay);
+            delay_off_by(ctrl, current_delay, goal) == (false, false)
+        }
+    }
+}
+
+/// The most of `target_delay` the buffer can give. A full ring reaches
+/// back only to its keyframe near the oldest tag (`delayed_idr`), so a pump
+/// there has all the delay there is: the back cuts that follow as the ring
+/// stretches (a quieter scene, a lower bitrate) are no raise by the
+/// streamer and play no screen. While the buffer still refills (nothing to
+/// join yet) the goal stays the whole delay, so the jump that restores it
+/// later still counts as a change.
+fn reachable_delay(ctrl: &Controller, latest: u64, target_delay: u64) -> u64 {
+    if !ctrl.ring.is_saturated() {
+        return target_delay;
+    }
+    delayed_idr(ctrl, target_delay).map_or(target_delay, |idr| {
+        latest.saturating_sub(idr.ts_ms).min(target_delay)
+    })
+}
+
+/// The delay a pump at `at` sits on: the one on now when it is there or
+/// past it, or else how far behind live it really is (a rejoin on live
+/// video while the buffer refills, say). So the jump that later restores
+/// the delay counts as a change, and plays its screen. A pump past the
+/// delay counts as on it: a keyframe lands up to an interval behind, and
+/// the forward fine tune after a join, a rejoin or a screen is no lowering
+/// by the streamer (that changes the delay itself).
+fn delay_at(ctrl: &Controller, at: &TagMeta) -> u32 {
+    let target = ctrl.target_delay_ms();
+    if delay_has_landed(ctrl, at) {
+        return target;
+    }
+    ctrl.ring.latest_ts().map_or(target, |latest| {
+        u32::try_from(latest.saturating_sub(at.ts_ms))
+            .unwrap_or(u32::MAX)
+            .min(target)
+    })
+}
+
+/// The keyframe a delay transition's screen hands back to: where the delay
+/// on now puts viewers, judged afresh (the tag they paused on is a screen's
+/// length old by now). None while the buffer is short of the delay, or
+/// back to live when nothing is newer than where they paused.
+fn screen_rejoin_idr(ctrl: &Controller, paused: &TagMeta) -> Option<TagMeta> {
+    match u64::from(ctrl.target_delay_ms()) {
+        0 => ctrl.ring.newest_idr().filter(|idr| idr.seq > paused.seq),
+        target => delayed_idr(ctrl, target),
+    }
+}
+
 /// The cut a delay of `target_delay` needs, if any. A delay lands on the
 /// newest keyframe at least that old (see `delayed_idr`), so it sits
 /// between the target and one keyframe interval above it. Re-cutting only
@@ -4304,14 +4665,7 @@ fn compute_delayed_cut(
     current_delay: u64,
     target_delay: u64,
 ) -> Option<PendingCut> {
-    let keyframe_interval = ctrl.keyframe_interval_ms();
-    let gop = match keyframe_interval {
-        0 => DEFAULT_KEYFRAME_INTERVAL_MS,
-        measured => u64::from(measured),
-    };
-    let too_little = current_delay + DELAY_JITTER_MS < target_delay;
-    let upper_band = recut_dead_band_ms(keyframe_interval).max(gop + DELAY_JITTER_MS);
-    let too_much = current_delay > target_delay + upper_band;
+    let (too_little, too_much) = delay_off_by(ctrl, current_delay, target_delay);
     if !too_little && !too_much {
         ctrl.buffer_building.store(false, Ordering::Relaxed);
         return None;
@@ -4368,47 +4722,14 @@ async fn apply_cut(
     let last_out_ts = state.output_ts_base.wrapping_add(input_delta_u32);
     let new_output_ts_base = last_out_ts.wrapping_add(1);
 
-    // Detailed cut trace - every cut writes one log line with the
-    // before/after seq, the input-ts jump, and the resulting output_ts
-    // base. Now logs the ACTUAL new base (previously the formatter just
-    // showed `old+1`, useless for diagnosing post-cut drift), plus the
-    // current seq_header_gen so reconnect/codec-change events line up.
-    {
-        let prev_seq = state.consumer_seq;
-        let prev_ts = state.last_sent_input_ts;
-        let new_seq = cut.target.seq;
-        let new_ts = cut.target.ts_ms;
-        let direction = if new_ts > prev_ts {
-            "FWD"
-        } else if new_ts < prev_ts {
-            "BACK"
-        } else {
-            "SAME"
-        };
-        let delta_ms = (new_ts as i64) - (prev_ts as i64);
-        let gen = ctrl.seq_header_gen.load(Ordering::Relaxed);
-        ctrl.log(format!(
-            "[{}] CUT {} seq:{}→{}  ts:{}→{}  delta:{}ms  out_ts_base:0x{:08x}→0x{:08x}  gen:{}",
-            dest.id,
-            direction,
-            prev_seq,
-            new_seq,
-            prev_ts,
-            new_ts,
-            delta_ms,
-            state.output_ts_base,
-            new_output_ts_base,
-            gen,
-        ));
-        crate::trace::log(
-            "CUT",
-            &format!(
-                "dest={} dir={} seq={}→{} in_ts={}→{} delta_ms={} out_ts_base=0x{:08x}→0x{:08x} gen={}",
-                dest.id, direction, prev_seq, new_seq, prev_ts, new_ts, delta_ms,
-                state.output_ts_base, new_output_ts_base, gen,
-            ),
-        );
-    }
+    let from = (state.consumer_seq, state.last_sent_input_ts);
+    note_cut(
+        ctrl,
+        dest,
+        from,
+        &cut.target,
+        (state.output_ts_base, new_output_ts_base),
+    );
 
     state.output_ts_base = new_output_ts_base;
     state.input_ts_anchor = cut.target.ts_ms;
@@ -4421,6 +4742,7 @@ async fn apply_cut(
     state.wall_anchor_input_ts = cut.target.ts_ms;
     state.consumer_seq = cut.target.seq;
     state.last_sent_input_ts = cut.target.ts_ms;
+    state.landed_delay_ms = delay_at(ctrl, &cut.target);
     // The cut target is a horizontal-primary IDR; a vertical dest must
     // re-lead with its own canvas keyframe before resuming (see EgressState).
     state.awaiting_keyframe = true;
@@ -4452,8 +4774,43 @@ async fn apply_cut(
         Ordering::Relaxed,
     );
 
-    dest.cuts_performed.fetch_add(1, Ordering::Relaxed);
     Ok(())
+}
+
+/// Count a cut from `from` (seq, input ts) to `to` and write its line:
+/// the before/after seq, the input-ts jump and the output_ts base it moves
+/// `bases` to (old, new), plus the current seq_header_gen so reconnect and
+/// codec-change events line up. Every jump the pump makes writes one, the
+/// delay transition's included.
+fn note_cut(
+    ctrl: &Controller,
+    dest: &DestinationState,
+    (prev_seq, prev_ts): (u64, u64),
+    to: &TagMeta,
+    (old_base, new_base): (u32, u32),
+) {
+    let (new_seq, new_ts) = (to.seq, to.ts_ms);
+    let direction = match new_ts.cmp(&prev_ts) {
+        std::cmp::Ordering::Greater => "FWD",
+        std::cmp::Ordering::Less => "BACK",
+        std::cmp::Ordering::Equal => "SAME",
+    };
+    let delta_ms = (new_ts as i64) - (prev_ts as i64);
+    let gen = ctrl.seq_header_gen.load(Ordering::Relaxed);
+    ctrl.log(format!(
+        "[{}] CUT {direction} seq:{prev_seq}→{new_seq}  ts:{prev_ts}→{new_ts}  delta:{delta_ms}ms  \
+         out_ts_base:0x{old_base:08x}→0x{new_base:08x}  gen:{gen}",
+        dest.id,
+    ));
+    crate::trace::log(
+        "CUT",
+        &format!(
+            "dest={} dir={direction} seq={prev_seq}→{new_seq} in_ts={prev_ts}→{new_ts} \
+             delta_ms={delta_ms} out_ts_base=0x{old_base:08x}→0x{new_base:08x} gen={gen}",
+            dest.id,
+        ),
+    );
+    dest.cuts_performed.fetch_add(1, Ordering::Relaxed);
 }
 
 async fn send_sequence_headers(
@@ -4739,6 +5096,9 @@ mod hold_sim;
 mod delay_sim;
 
 #[cfg(test)]
+mod transition_sim;
+
+#[cfg(test)]
 mod user_sim;
 
 #[cfg(test)]
@@ -4825,6 +5185,51 @@ mod tests {
         let ring = Arc::new(DiskRing::create(&path, 4 * 1024 * 1024).expect("ring create"));
         let ctrl = Arc::new(Controller::new(ring, initial_armed_ms));
         Harness { ctrl, path }
+    }
+
+    /// The transition screens built ahead: the armed delay first, then each
+    /// profile's once, none of zero, at most six; one when the words don't
+    /// name the delay.
+    #[test]
+    fn transition_screens_are_built_ahead_for_the_likely_delays() {
+        let h = harness(30_000);
+        let profile = |delay_ms| crate::config::DelayProfile {
+            name: String::new(),
+            delay_ms,
+        };
+        let profiles: Vec<_> = [15_000, 30_000, 0, 60_000, 5_000, 120_000, 240_000, 480_000]
+            .into_iter()
+            .map(profile)
+            .collect();
+        h.ctrl
+            .update_delay_transition(crate::delay_transition::DelayTransition {
+                enabled: true,
+                ..Default::default()
+            });
+        assert_eq!(
+            h.ctrl.transition_delays(&profiles),
+            [30_000, 15_000, 60_000, 5_000, 120_000, 240_000]
+        );
+        let mut plain = crate::delay_transition::DelayTransition::default();
+        plain.set("headline", "Back in a moment");
+        h.ctrl.update_delay_transition(plain.clone());
+        assert_eq!(h.ctrl.transition_delays(&profiles), [30_000]);
+
+        // The catch-up screen: no delay first, then the profiles below the
+        // 30 s armed (a delay can only go down to those), when its words
+        // name the delay. As they came they do ("Delay down to 15 s").
+        assert_eq!(h.ctrl.catch_up_delays(&profiles), [0, 15_000, 5_000]);
+        plain.set("catch_up_headline", "Back to live");
+        plain.set("catch_up_subline", "Catching up");
+        h.ctrl.update_delay_transition(plain.clone());
+        assert_eq!(
+            h.ctrl.catch_up_delays(&profiles),
+            [0],
+            "words naming nothing"
+        );
+        plain.set("catch_up_subline", "Down to {delay}");
+        h.ctrl.update_delay_transition(plain);
+        assert_eq!(h.ctrl.catch_up_delays(&profiles), [0, 15_000, 5_000]);
     }
 
     /// Push N seconds of fake tags into the ring at `fps`. Each IDR is at
@@ -6507,6 +6912,98 @@ mod tests {
         h.ctrl.on_tag(9, 40, &[0x27, 1, 0, 0, 0], false, false);
         assert_eq!(h.ctrl.hold_state(), crate::crash_hold::HoldState::Resumed);
         assert!(h.ctrl.ingest_sending());
+    }
+
+    /// A delay changed by less than a cut can fix has landed as it is, so
+    /// the pump counts it as the streamer's and a later drift fix plays no
+    /// screen; a raise still waiting on its cut has not landed.
+    #[tokio::test]
+    async fn a_delay_changed_inside_the_dead_band_has_landed() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.arm_delay(10_000);
+        feed_seconds(&h.ctrl, 0, 30, 30);
+        h.ctrl.activate_delay().expect("the buffer holds the delay");
+        // The pump 10 s behind the live edge: on the delay.
+        let current = h.ctrl.ring.find_idr_near(20_000, 500).unwrap();
+        assert!(compute_delay_cut(&h.ctrl, &current).is_none());
+        assert!(delay_has_landed(&h.ctrl, &current));
+
+        h.ctrl.arm_delay(9_000);
+        assert_eq!(h.ctrl.target_delay_ms(), 9_000);
+        assert!(
+            compute_delay_cut(&h.ctrl, &current).is_none(),
+            "a second less needs no cut"
+        );
+        assert!(delay_has_landed(&h.ctrl, &current), "so it has landed");
+
+        h.ctrl.arm_delay(20_000);
+        assert!(
+            !delay_has_landed(&h.ctrl, &current),
+            "a raise still to come"
+        );
+    }
+
+    /// A delay longer than a full ring holds has landed once the pump sits
+    /// as far back as the ring reaches, so the back cuts that follow as the
+    /// ring stretches play no "Going back" screen; a pump on live video has
+    /// not landed.
+    #[tokio::test]
+    async fn a_delay_capped_by_a_full_ring_has_landed_at_the_cap() {
+        let n = UNIQ.fetch_add(1, TestOrd::SeqCst);
+        let path = env::temp_dir().join(format!("ic-test-full-{}-{}.buf", std::process::id(), n));
+        let _ = std::fs::remove_file(&path);
+        // About 20 s of the fed tags: far short of the minute armed.
+        let ring = Arc::new(DiskRing::create(&path, 64 * 1024).expect("ring create"));
+        let h = Harness {
+            ctrl: Arc::new(Controller::new(ring, 60_000)),
+            path,
+        };
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        feed_seconds(&h.ctrl, 0, 90, 30);
+        assert!(h.ctrl.ring.is_saturated(), "the ring is full");
+        h.ctrl
+            .activate_delay()
+            .expect("a full ring is ready to delay");
+        assert_eq!(h.ctrl.target_delay_ms(), 60_000);
+        let cap = delayed_idr(&h.ctrl, 60_000).expect("a full ring delays by what it holds");
+        assert!(delay_has_landed(&h.ctrl, &cap), "at the cap: landed");
+        assert_eq!(delay_at(&h.ctrl, &cap), 60_000, "counts as the delay on");
+        let live = h.ctrl.ring.newest_idr().unwrap();
+        assert!(!delay_has_landed(&h.ctrl, &live), "on live: still to come");
+    }
+
+    /// A pump further behind than the delay (a join, or a keyframe landing
+    /// past it) sits on the delay as far as screens go: the forward fine
+    /// tune that follows is no lowering, so it plays no catch-up screen.
+    /// One short of it still counts its real delay, so the raise to come
+    /// plays its screen.
+    #[tokio::test]
+    async fn a_pump_behind_the_delay_counts_as_on_it() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.arm_delay(20_000);
+        feed_seconds(&h.ctrl, 0, 30, 30);
+        h.ctrl.activate_delay().expect("the buffer holds the delay");
+        h.ctrl.arm_delay(10_000);
+        let past = h.ctrl.ring.find_idr_near(15_000, 500).unwrap();
+        assert!(
+            !delay_has_landed(&h.ctrl, &past),
+            "15 s behind a 10 s delay"
+        );
+        assert_eq!(delay_at(&h.ctrl, &past), 10_000);
+
+        h.ctrl.stop_delay();
+        assert_eq!(delay_at(&h.ctrl, &past), 0, "behind live: on no delay");
+
+        h.ctrl.arm_delay(10_000);
+        h.ctrl.activate_delay().expect("the buffer holds the delay");
+        let short = h.ctrl.ring.find_idr_near(25_000, 500).unwrap();
+        let real = delay_at(&h.ctrl, &short);
+        assert!(
+            (4_000..6_000).contains(&real),
+            "5 s short counts as {real} ms"
+        );
     }
 
     /// OBS crashes with a 10 s delay on air: the buffer stops growing, so

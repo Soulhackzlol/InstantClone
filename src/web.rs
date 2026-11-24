@@ -148,7 +148,6 @@ async fn serve(
         return Ok(());
     };
     let (origin, host) = parse_origin_host(head_str);
-    let accept_gzip = accepts_gzip(head_str);
 
     // CSRF guard - block cross-origin browser POSTs. See `allow_csrf`
     // for the policy. Pre-flight OPTIONS gets a generic 204 so browsers
@@ -248,32 +247,19 @@ async fn serve(
         AuthDecision::Allow { cookie, is_admin } => (cookie, is_admin),
     };
 
-    // Fast-path: static, pre-gzipped dashboard + dock. These two pages
-    // dominate the binary (~125 KB raw); shipping only the gz blob saves
-    // ~100 KB. Every real browser sends `Accept-Encoding: gzip`; for the
-    // rare client that doesn't we return 406 with a friendly hint rather
-    // than ship a runtime inflater that would erase the savings.
+    // Fast-path: the static dashboard + dock, embedded at build time and
+    // written straight from the binary. Embedded as plain text, not gzip:
+    // compressed blobs made the exe look packed to antivirus scanners
+    // (issue #101), and every request is local, so compression saved
+    // nothing on the wire.
     if method == "GET" && (bare_path == "/" || bare_path == "/dock") {
-        if !accept_gzip {
-            let body = b"this build serves gzip-encoded HTML; \
-                         retry with Accept-Encoding: gzip" as &[u8];
-            let r = format!(
-                "HTTP/1.1 406 Not Acceptable\r\nContent-Type: text/plain; charset=utf-8\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            sock.write_all(r.as_bytes()).await?;
-            sock.write_all(body).await?;
-            return Ok(());
-        }
         let blob: &'static [u8] = if bare_path == "/" {
-            INDEX_HTML_GZ
+            INDEX_HTML
         } else {
-            DOCK_HTML_GZ
+            DOCK_HTML
         };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
-             Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n\
              Content-Length: {}\r\n\
              Access-Control-Allow-Origin: *\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
             blob.len(),
@@ -284,36 +270,23 @@ async fn serve(
         return Ok(());
     }
 
-    // Overlay Studio runtime - static pre-gzipped JS, same fast-path as
-    // the dashboard. Served to the dashboard tab only; baked overlays
-    // inline what they need and never request this.
+    // The pages' static scripts, the same fast-path as the dashboard. The
+    // Overlay Studio runtime goes to the dashboard tab only; baked overlays
+    // inline what they need and never request it.
     if method == "GET"
         && (bare_path == "/overlay-runtime.js"
             || bare_path == "/dock.js"
             || bare_path == "/integrations.js"
             || bare_path == "/studio.js")
     {
-        if !accept_gzip {
-            let body = b"this build serves gzip-encoded JS; \
-                         retry with Accept-Encoding: gzip" as &[u8];
-            let r = format!(
-                "HTTP/1.1 406 Not Acceptable\r\nContent-Type: text/plain; charset=utf-8\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            sock.write_all(r.as_bytes()).await?;
-            sock.write_all(body).await?;
-            return Ok(());
-        }
         let blob: &'static [u8] = match bare_path {
-            "/dock.js" => DOCK_JS_GZ,
-            "/integrations.js" => INTEGRATIONS_JS_GZ,
-            "/studio.js" => STUDIO_JS_GZ,
-            _ => OVERLAY_RUNTIME_JS_GZ,
+            "/dock.js" => DOCK_JS,
+            "/integrations.js" => INTEGRATIONS_JS,
+            "/studio.js" => STUDIO_JS,
+            _ => OVERLAY_RUNTIME_JS,
         };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
-             Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n\
              Content-Length: {}\r\n\
              Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
             blob.len()
@@ -327,12 +300,12 @@ async fn serve(
     // translator; any other language's file carries its strings too.
     if method == "GET" && bare_path == "/i18n.js" {
         let blob = match page_language(&settings.borrow().ui_language, head_str) {
-            "es" => I18N_ES_JS_GZ,
-            _ => I18N_EN_JS_GZ,
+            "es" => I18N_ES_JS,
+            _ => I18N_EN_JS,
         };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
-             Content-Encoding: gzip\r\nContent-Length: {}\r\n\
+             Content-Length: {}\r\n\
              Cache-Control: no-store\r\nConnection: close\r\n\r\n",
             blob.len()
         );
@@ -460,11 +433,18 @@ async fn serve(
     if method == "GET" && bare_path == "/crash-protection/preview" {
         let query = path.split_once('?').map_or("", |(_, q)| q).to_string();
         let saved = settings.borrow().crash_protection.clone();
-        let image = tokio::task::spawn_blocking(move || crash_protection_preview(&query, &saved))
-            .await
-            .map_err(io::Error::other)?;
+        let is_live = ctrl.ingest_alive();
+        let preview =
+            tokio::task::spawn_blocking(move || crash_protection_preview(&query, &saved, is_live))
+                .await
+                .map_err(io::Error::other)?;
+        let Some((content_type, image)) = preview else {
+            // A newer preview for the same editor replaced this one.
+            write_simple(&mut sock, "204 No Content", "text/plain", "", "").await?;
+            return Ok(());
+        };
         let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
              Cache-Control: no-store\r\nConnection: close\r\n\r\n",
             image.len()
         );
@@ -514,15 +494,25 @@ async fn serve(
 /// Render the preview for the saved crash-protection settings with any
 /// unsaved `crash_protection.*` edits from the query applied on top, so
 /// the dashboard can preview before Save. `orientation=vertical` flips it
-/// to 9:16; `phase` (0..1) picks the moment in the 2 s loop, or
-/// `frames=N` stacks N evenly spaced moments into one strip the dashboard
-/// animates; `size=thumb` draws the small version the theme picker shows.
+/// to 9:16; `phase` (0..1) picks the moment of the loop a still shows;
+/// `size=thumb` draws the small version the theme picker shows,
+/// `size=full` the 1080p one the full-size view plays; `format=mp4`
+/// encodes the whole loop as a video instead, the dashboard's preview;
+/// `delay` (ms) writes out `{delay}` in the words. Answers the content
+/// type with the bytes, or None for a video a newer request from the same
+/// editor (`slot`) replaced before it was encoded (see `PreviewQueue`).
+/// `is_live`: a stream is on, so a video encodes on one thread.
 fn crash_protection_preview(
     query: &str,
     saved: &crate::crash_protection::CrashProtection,
-) -> Vec<u8> {
+    is_live: bool,
+) -> Option<(&'static str, Vec<u8>)> {
     const DEFAULT_PHASE: f32 = 0.25;
-    const MAX_FRAMES: usize = 24;
+    // Twice the size each is shown at, so they stay sharp on high-DPI
+    // screens; full size is what a 1080p stream carries.
+    const PREVIEW: (usize, usize) = (960, 540);
+    const THUMB: (usize, usize) = (384, 216);
+    const FULL: (usize, usize) = (1920, 1080);
     let form = config::parse_form(query);
     let mut settings = saved.clone();
     for (key, value) in &form {
@@ -530,28 +520,99 @@ fn crash_protection_preview(
             settings.set(field, value);
         }
     }
+    // The delay transition's words, written out for an example delay as
+    // the stream will write out the one turned on.
+    if let Some(delay_ms) = form
+        .get("delay")
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        settings.headline = crate::delay_transition::with_delay(&settings.headline, delay_ms);
+        settings.subline = crate::delay_transition::with_delay(&settings.subline, delay_ms);
+    }
     let (long_side, short_side) = match form.get("size").map(String::as_str) {
-        Some("thumb") => (192, 108),
-        _ => (480, 270),
+        Some("thumb") => THUMB,
+        Some("full") => FULL,
+        _ => PREVIEW,
     };
     let (width, height) = if form.get("orientation").map(String::as_str) == Some("vertical") {
         (short_side, long_side)
     } else {
         (long_side, short_side)
     };
-    let frames = form
-        .get("frames")
-        .and_then(|value| value.parse::<usize>().ok())
-        .map(|count| count.clamp(1, MAX_FRAMES));
-    let phases: Vec<f32> = match frames {
-        Some(count) => (0..count).map(|i| i as f32 / count as f32).collect(),
-        None => vec![form
-            .get("phase")
-            .and_then(|value| value.parse::<f32>().ok())
-            .filter(|value| (0.0..1.0).contains(value))
-            .unwrap_or(DEFAULT_PHASE)],
-    };
-    crate::slate::preview_png(&settings, width, height, &phases)
+    if form.get("format").map(String::as_str) == Some("mp4") {
+        let ticket = PREVIEWS.ticket(form.get("slot").map(String::as_str));
+        let _turn = PREVIEWS.turn(ticket)?;
+        if let Some(video) = crate::slate::preview_mp4(&settings, width, height, is_live) {
+            return Some(("video/mp4", video));
+        }
+    }
+    let phase = form
+        .get("phase")
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| (0.0..1.0).contains(value))
+        .unwrap_or(DEFAULT_PHASE);
+    let image = crate::slate::preview_png(&settings, width, height, phase);
+    Some(("image/png", image))
+}
+
+/// Video previews encode one at a time. Each is a whole loop, and an
+/// editor asks for a new one 250 ms after each edit, so a streamer
+/// dragging a colour picker while live would otherwise stack encodes and
+/// take cores from OBS. A request that a newer one from the same editor
+/// replaced while it waited is dropped before it encodes.
+struct PreviewQueue {
+    turn: std::sync::Mutex<()>,
+    tickets: std::sync::atomic::AtomicU64,
+    /// The newest ticket of each editor, in `PREVIEW_SLOTS` order.
+    newest: [std::sync::atomic::AtomicU64; PREVIEW_SLOTS.len()],
+}
+
+/// The editors that ask for video previews: the crash screen's, the delay
+/// transition's, and the full-size view.
+const PREVIEW_SLOTS: [&str; 3] = ["crash", "transition", "full"];
+
+static PREVIEWS: PreviewQueue = PreviewQueue::new();
+
+/// A place in the `PreviewQueue`: its number and the editor it is for.
+#[derive(Clone, Copy)]
+struct PreviewTicket {
+    number: u64,
+    slot: Option<usize>,
+}
+
+impl PreviewQueue {
+    const fn new() -> Self {
+        use std::sync::atomic::AtomicU64;
+        Self {
+            turn: std::sync::Mutex::new(()),
+            tickets: AtomicU64::new(0),
+            newest: [const { AtomicU64::new(0) }; PREVIEW_SLOTS.len()],
+        }
+    }
+
+    /// A ticket for the editor named `slot`: from now on its newest. A
+    /// request naming no known editor is never replaced.
+    fn ticket(&self, slot: Option<&str>) -> PreviewTicket {
+        use std::sync::atomic::Ordering;
+        let number = self.tickets.fetch_add(1, Ordering::Relaxed) + 1;
+        let slot = slot.and_then(|name| PREVIEW_SLOTS.iter().position(|s| *s == name));
+        if let Some(slot) = slot {
+            self.newest[slot].store(number, Ordering::Relaxed);
+        }
+        PreviewTicket { number, slot }
+    }
+
+    /// Wait for the encode turn. None when a newer ticket for the same
+    /// editor was taken meanwhile: that request will draw it instead.
+    fn turn(&self, ticket: PreviewTicket) -> Option<std::sync::MutexGuard<'_, ()>> {
+        use std::sync::atomic::Ordering;
+        // A preview that panicked held it last; the lock guards no data.
+        let turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
+        let is_newest = ticket
+            .slot
+            .is_none_or(|slot| self.newest[slot].load(Ordering::Relaxed) == ticket.number);
+        is_newest.then_some(turn)
+    }
 }
 
 /// Result of the auth gate: either it already wrote a response (login page,
@@ -987,7 +1048,7 @@ async fn route(
 
     match (method, bare_path) {
         // GET / and GET /dock are handled in serve() as a fast-path
-        // (static gz blob, no allocation, no String round-trip).
+        // (static embedded page, no allocation, no String round-trip).
         ("GET", "/overlay") => ("200 OK", "text/html; charset=utf-8", overlay_html(query)),
         ("GET", "/alerts") => (
             "200 OK",
@@ -1502,9 +1563,10 @@ fn dest_video(
     // icon show "both" only when Dual Format is actually on, rather than
     // just because the destination is Twitch.
     let track = ctrl
-        .destination_state(&dest.id)
-        .vertical_primary_track
-        .load(Ordering::Relaxed);
+        .existing_destination_state(&dest.id)
+        .map_or(0xFF, |state| {
+            state.vertical_primary_track.load(Ordering::Relaxed)
+        });
     // The sequence-header cache outlives the OBS session (it is cleared on
     // the next publish), so a canvas only counts while OBS is live.
     let vertical_canvas_present = track != 0xFF && ctrl.ingest_alive();
@@ -1604,7 +1666,8 @@ fn state_json(
             vcp = v.vertical_canvas_present,
             vres = json_escape_quoted(&v.res),
             vcod = json_escape_quoted(&v.codec),
-            oh = holding && alive && crate::crash_hold::covers(ctrl, &ctrl.destination_state(&d.id)),
+            oh = holding && alive && ctrl.existing_destination_state(&d.id)
+                .is_some_and(|state| crate::crash_hold::covers(ctrl, &state)),
             fl = dest_failure_json(ctrl, &d.id),
         )
     }).collect::<Vec<_>>().join(",");
@@ -1637,7 +1700,7 @@ fn state_json(
     let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"rev":{rev},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"transition_screens_ready":{tsr},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"rev":{rev},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         // The dock's events list changed: it fetches the list again.
         fd = ctrl.integrations().map_or(0, |h| h.feed.changes()),
@@ -1647,6 +1710,11 @@ fn state_json(
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
         hold = hold_json(ctrl),
+        // Whether the delay transition's screens are encoded for the live
+        // destinations yet (null while none are being kept).
+        tsr = ctrl
+            .transition_screens_ready()
+            .map_or_else(|| "null".to_string(), |ready| ready.to_string()),
         tail = ctrl.tail_left().map_or(0, |left| left.as_millis()),
         cw = json_escape_quoted(&compat_warning),
         la = ctrl
@@ -3064,6 +3132,7 @@ fn is_settable_key(k: &str) -> bool {
         || k.starts_with("hotkey.")
         || k.starts_with("midi.")
         || k.starts_with(crate::crash_protection::KEY_PREFIX)
+        || k.starts_with(crate::delay_transition::KEY_PREFIX)
 }
 
 async fn post_config(
@@ -5531,6 +5600,10 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
             s.crash_protection
                 .set(&k[crate::crash_protection::KEY_PREFIX.len()..], value);
         }
+        k if k.starts_with(crate::delay_transition::KEY_PREFIX) => {
+            s.delay_transition
+                .set(&k[crate::delay_transition::KEY_PREFIX.len()..], value);
+        }
         // Empty means "every device", which is also what an unknown name
         // amounts to - the listener simply finds nothing to open and the
         // dashboard says so.
@@ -5609,41 +5682,6 @@ fn parse_origin_host(head: &str) -> (String, String) {
         }
     }
     (origin, host)
-}
-
-/// True iff the client's `Accept-Encoding` header advertises `gzip` (with
-/// a non-zero q value if specified). Used by the static-page fast-path
-/// to decide whether to ship the pre-gzipped HTML blob directly.
-fn accepts_gzip(head: &str) -> bool {
-    for line in head.split("\r\n") {
-        if let Some(v) = strip_prefix_icase(line, "accept-encoding:") {
-            for part in v.split(',') {
-                let p = part.trim();
-                // Each entry is `token` or `token;q=N`. We only need to
-                // confirm gzip appears with q != 0.
-                let (token, q) = match p.split_once(';') {
-                    Some((t, params)) => {
-                        let qv = params
-                            .split(';')
-                            .find_map(|kv| {
-                                let kv = kv.trim();
-                                kv.strip_prefix("q=").or_else(|| kv.strip_prefix("Q="))
-                            })
-                            .and_then(|s| s.parse::<f32>().ok())
-                            .unwrap_or(1.0);
-                        (t.trim(), qv)
-                    }
-                    None => (p, 1.0),
-                };
-                if q > 0.0
-                    && (token.eq_ignore_ascii_case("gzip") || token.eq_ignore_ascii_case("*"))
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 /// CSRF guard for POST endpoints. Returns true if the request should be
@@ -6100,35 +6138,34 @@ fn json_escape(s: &str) -> String {
 /// Compact view for OBS browser-dock embedding. ~280x340 looks decent.
 /// Reuses the same `/state` + `/arm` + `/activate` + `/stop` endpoints
 /// as the main dashboard so behavior stays identical. Source lives in
-/// `web/dock.html` - built-time minified + gzipped (see `build.rs`).
-static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html.gz"));
+/// `web/dock.html` - minified at build time (see `build.rs`).
+static DOCK_HTML: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html"));
 
 /// Dock logic (widget rendering, gear editor, state polling). Split out of
 /// `dock.html` so the page stays markup+CSS; source in `web/dock.js`,
-/// build-time gzipped (see `build.rs`).
-static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"));
+/// embedded at build time (see `build.rs`).
+static DOCK_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js"));
 
 /// Main dashboard / first-run wizard. Source lives in `web/dashboard/`
-/// (its skeleton `index.html` includes the pieces); build-time joined,
-/// minified + gzipped (see `build.rs`).
-static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
+/// (its skeleton `index.html` includes the pieces); joined and
+/// minified at build time (see `build.rs`).
+static INDEX_HTML: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html"));
 /// The dashboard's Integrations tab; source in `web/integrations/`
-/// (its skeleton `integrations.js` includes the pieces), build-time
-/// gzipped like the dock script.
-static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
-/// The Overlay Studio editor; source in `web/studio.js`, gzipped the same way.
-static STUDIO_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js.gz"));
+/// (its skeleton `integrations.js` includes the pieces), joined at build
+/// time like the dashboard.
+static INTEGRATIONS_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js"));
+/// The Overlay Studio editor; source in `web/studio.js`, embedded the same way.
+static STUDIO_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js"));
 
 /// Overlay Studio author-time runtime + baker. Loaded only by the
 /// dashboard (never by a live overlay in OBS). Source lives in
-/// `web/overlay-runtime.js`; build-time gzipped (see `build.rs`).
-static OVERLAY_RUNTIME_JS_GZ: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/overlay-runtime.js.gz"));
+/// `web/overlay-runtime.js`; embedded at build time (see `build.rs`).
+static OVERLAY_RUNTIME_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/overlay-runtime.js"));
 
 /// `web/i18n.js` alone (English), and with the Spanish strings ahead of it.
 /// Built from `web/i18n/` (see `build.rs`).
-static I18N_EN_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-en.js.gz"));
-static I18N_ES_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-es.js.gz"));
+static I18N_EN_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-en.js"));
+static I18N_ES_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-es.js"));
 
 /// The language the pages show: the one picked in System, or for "auto" the
 /// first one in the browser's `Accept-Language` list that has strings.
@@ -6161,7 +6198,7 @@ fn page_language(setting: &str, head: &str) -> &'static str {
 /// Optional VOD-unlocker OBS Lua script, embedded from `obs/`. Served by
 /// `GET /obs/vod-script/download` as a Save-As attachment. Embedding keeps it
 /// in lockstep with the running binary (no release-asset version skew) and
-/// needs no network. ~8 KB of text; not worth gzipping for a one-off download.
+/// needs no network.
 static VOD_UNLOCKER_LUA: &str = include_str!("../obs/instantclone-vod-track.lua");
 /// Render the OBS browser-source overlay. Supports two query knobs:
 ///   ?lang=en|es|pt|fr|de                         - label localization
@@ -6700,6 +6737,35 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// Reading `/state` must not register destinations: a switched-off one
+    /// would count in the header's "0/2 live" until the supervisor dropped
+    /// it, and the pill flickered between that and "Nothing yet".
+    #[test]
+    fn the_state_feed_counts_only_destinations_that_run() {
+        let (ctrl, settings, path) = refusal_harness();
+        let mut s = settings.borrow().clone();
+        s.destinations.push(crate::config::Destination {
+            id: "switched-off".into(),
+            name: "Twitch".into(),
+            enabled: false,
+            platform: "custom".into(),
+            stream_key: "KEY".into(),
+            custom_egress_url: "rtmp://host/app".into(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
+        });
+        settings.send_replace(s);
+        let json = state_json(&ctrl, &settings, &Arc::new(SysStat::new()));
+        assert!(json.contains(r#""id":"switched-off""#), "listed: {json}");
+        assert!(json.contains(r#""destinations_total":0"#), "{json}");
+        assert_eq!(ctrl.destination_alive_summary(), (0, 0));
+        let _ = std::fs::remove_file(path);
+    }
+
     /// The page and the server key an overlay the same way, or a save would
     /// never reach it (overlay-runtime.js computes this same FNV-1a 32).
     #[test]
@@ -7028,6 +7094,48 @@ mod tests {
                 read: |s| s.crash_protection.enabled.to_string(),
             },
             SettableRow {
+                key: "delay_transition.enabled",
+                set: "on",
+                reads_as: "true",
+                reset: "off",
+                read: |s| s.delay_transition.enabled.to_string(),
+            },
+            SettableRow {
+                key: "delay_transition.headline",
+                set: "Be right back",
+                reads_as: "Be right back",
+                reset: "Going back {delay}",
+                read: |s| s.delay_transition.headline.clone(),
+            },
+            SettableRow {
+                key: "delay_transition.subline",
+                set: "Grab a drink",
+                reads_as: "Grab a drink",
+                reset: "Turning the delay on",
+                read: |s| s.delay_transition.subline.clone(),
+            },
+            SettableRow {
+                key: "delay_transition.catch_up",
+                set: "on",
+                reads_as: "true",
+                reset: "off",
+                read: |s| s.delay_transition.catch_up.to_string(),
+            },
+            SettableRow {
+                key: "delay_transition.catch_up_headline",
+                set: "Skipping ahead",
+                reads_as: "Skipping ahead",
+                reset: "Going back to the present",
+                read: |s| s.delay_transition.catch_up_headline.clone(),
+            },
+            SettableRow {
+                key: "delay_transition.catch_up_subline",
+                set: "Back to live",
+                reads_as: "Back to live",
+                reset: "Catching up with the stream",
+                read: |s| s.delay_transition.catch_up_subline.clone(),
+            },
+            SettableRow {
                 key: "crash_protection.hold_secs",
                 set: "45",
                 reads_as: "45",
@@ -7279,12 +7387,36 @@ mod tests {
         assert!(loaded.midi.entries().iter().all(|(_, m)| m.is_empty()));
     }
 
+    /// A video preview that a newer one from the same editor replaced while
+    /// it waited is never encoded; other editors' previews are untouched.
+    #[test]
+    fn a_replaced_preview_gives_its_turn_away() {
+        let queue = PreviewQueue::new();
+        let older = queue.ticket(Some("transition"));
+        let crash = queue.ticket(Some("crash"));
+        let newer = queue.ticket(Some("transition"));
+        let unnamed = queue.ticket(None);
+        assert!(queue.turn(older).is_none(), "replaced: skipped");
+        assert!(queue.turn(newer).is_some(), "the newest draws");
+        assert!(queue.turn(crash).is_some(), "another editor's stays");
+        assert!(
+            queue.turn(unnamed).is_some(),
+            "no editor named: never replaced"
+        );
+    }
+
     #[test]
     fn crash_protection_preview_applies_unsaved_edits() {
         let saved = crate::crash_protection::CrashProtection::default();
-        let landscape = crash_protection_preview("", &saved);
-        let arcade = crash_protection_preview("crash_protection.theme=arcade", &saved);
-        let vertical = crash_protection_preview("orientation=vertical", &saved);
+        let image = |query: &str| {
+            let (content_type, bytes) =
+                crash_protection_preview(query, &saved, false).expect("a still");
+            assert_eq!(content_type, "image/png", "{query}");
+            bytes
+        };
+        let landscape = image("");
+        let arcade = image("crash_protection.theme=arcade");
+        let vertical = image("orientation=vertical");
         // PNG: width and height sit big-endian at bytes 16 and 20.
         let size = |png: &[u8]| {
             let read = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
@@ -7292,14 +7424,31 @@ mod tests {
         };
         assert_eq!(&landscape[1..4], b"PNG");
         assert_ne!(landscape, arcade, "query edits reach the render");
-        assert_eq!(size(&vertical), (270, 480));
-        let thumb = crash_protection_preview("size=thumb", &saved);
-        assert_eq!(size(&thumb), (192, 108));
-        let strip = crash_protection_preview("frames=24", &saved);
-        assert_eq!(size(&strip), (480, 270 * 24), "24 frames stacked");
-        let capped = crash_protection_preview("frames=500&size=thumb", &saved);
-        assert_eq!(size(&capped), (192, 108 * 24));
-        for preview_only in ["orientation", "size", "phase", "frames"] {
+        assert_eq!(size(&vertical), (540, 960));
+        let thumb = image("size=thumb");
+        assert_eq!(size(&thumb), (384, 216));
+        assert_eq!(size(&image("size=full")), (1920, 1080));
+        assert_ne!(
+            image("phase=0.1"),
+            image("phase=0.6"),
+            "phase picks the moment"
+        );
+        // The video preview: an MP4, starting with its ftyp box.
+        for theme in ["halo", "whisper"] {
+            let query = format!("crash_protection.theme={theme}&size=thumb&format=mp4");
+            for is_live in [false, true] {
+                let (content_type, video) =
+                    crash_protection_preview(&query, &saved, is_live).expect("a video");
+                assert_eq!(content_type, "video/mp4", "{theme}");
+                assert_eq!(&video[4..8], b"ftyp", "{theme}");
+            }
+        }
+        // The delay transition's words name an example delay.
+        let named =
+            image("crash_protection.headline=Loading%20a%20%7Bdelay%7D%20delay&delay=60000");
+        let written = image("crash_protection.headline=Loading%20a%201%20min%20delay");
+        assert_eq!(named, written, "{{delay}} written out");
+        for preview_only in ["orientation", "size", "phase", "format", "delay", "slot"] {
             assert!(
                 !is_settable_key(preview_only),
                 "preview-only params never persist"
@@ -7553,31 +7702,6 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
             "GET /alerts-events HTTP/1.1
 "
         ));
-    }
-
-    /// The compressed page goes only to a browser that asked for gzip.
-    #[test]
-    fn gzip_is_sent_only_to_a_client_that_accepts_it() {
-        for (header, accepted, why) in [
-            ("Accept-Encoding: gzip, deflate, br", true, "listed"),
-            ("Accept-Encoding: gzip", true, "alone"),
-            ("accept-encoding: GZIP", true, "any letter case"),
-            ("Accept-Encoding: *", true, "the wildcard"),
-            (
-                "Accept-Encoding: gzip;q=0.5, deflate",
-                true,
-                "a quality above zero",
-            ),
-            ("Host: x", false, "no header"),
-            ("Accept-Encoding: identity", false, "identity only"),
-            ("Accept-Encoding: deflate, br", false, "other codings only"),
-            // RFC 7231: `q=0` explicitly forbids that coding.
-            ("Accept-Encoding: gzip;q=0", false, "gzip forbidden"),
-            ("Accept-Encoding: *;q=0", false, "everything forbidden"),
-        ] {
-            let head = format!("GET / HTTP/1.1\r\n{header}\r\n");
-            assert_eq!(accepts_gzip(&head), accepted, "{why}: {header}");
-        }
     }
 
     /// `/overlay` needs no auth, and its `lang` is written into the page's
@@ -8544,8 +8668,8 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
             Response::parse(&self.send_raw_from(peer_ip, raw).await)
         }
 
-        /// The response bytes as they came, for a body that isn't text (the
-        /// gzipped dashboard and dock pages).
+        /// The response bytes as they came, for a test that reads only the head
+        /// (the dashboard and dock pages are large).
         async fn send_raw_from(&self, peer_ip: &str, raw: &[u8]) -> Vec<u8> {
             let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
             let addr = listener.local_addr().expect("addr");
@@ -9374,12 +9498,9 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         let live = locked_live();
         let path = format!("/dock?token={TEST_DOCK_TOKEN}");
         let raw = live
-            .send_raw_from(
-                "127.0.0.1",
-                &request("GET", &path, "Accept-Encoding: gzip\r\n", b""),
-            )
+            .send_raw_from("127.0.0.1", &request("GET", &path, "", b""))
             .await;
-        // The page itself is gzip, so only the head is read as text.
+        // Only the head matters here; the page itself is large.
         let head_end = find_subslice(&raw, b"\r\n\r\n").expect("a response head");
         let head = std::str::from_utf8(&raw[..head_end]).expect("a text head");
         assert!(head.starts_with("HTTP/1.1 200 "), "{head}");

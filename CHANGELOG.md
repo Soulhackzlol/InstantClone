@@ -4,6 +4,52 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - No more antivirus false alarms, and screens that move
+
+### Windows Defender and antivirus
+
+- **Windows Defender no longer flags InstantClone as a trojan.** 0.2.0 was
+  a false positive (`Wacatac.B!ml`), but Defender could quarantine it in
+  the middle of a stream (thanks **@ReddRubinho** on GitHub for the
+  report). Nothing was removed: every feature now does its job the way
+  ordinary apps do, without hidden command windows. A test build went from
+  47 to 9 of 70 engines on VirusTotal, with Microsoft clean.
+- The exe now shows its name, version and icon in Explorer.
+- The download is a little bigger (about 5 MB): the dashboard is stored as
+  plain text, which scanners no longer mistake for a packed program.
+
+### Crash protection screens
+
+- **Six new styles**: Aurora, Halo and Tide (soft light in slow loops),
+  plus Halftone, Lattice and Embers.
+- **Every style moves smoothly**, at 30 frames a second.
+- A soft style builds in the background while you're live. Until it is
+  ready, a flat screen in the same colours and words stands in.
+- **Previews are the real thing**: the same video your viewers would get,
+  sharp on any screen, with a full-size view.
+- The screen editors have their own **Extras** tab.
+- No more streaks or ghosts around the text.
+
+### Delay transition (experimental)
+
+- **No more repeated seconds when a delay goes on.** Turning a delay on or
+  raising it shows viewers a one-second screen ("Going back 30 s") instead
+  of jumping them back into video they just saw.
+- An optional **catch-up screen** plays when the delay goes down or off.
+- Its own style, colours and words. Write `{delay}` to show the new delay.
+  Left as they are, the words fit each change: on, up, down or off.
+- The card says when the screens are **ready on your stream**.
+- Works on H.264 and 8-bit HEVC. Destinations on AV1 or 10-bit HEVC jump
+  as before.
+
+### Fixes
+
+- With Enhanced Broadcasting, the keyframe interval is measured on the main
+  quality only, so delay cuts land where they should.
+- Editing a screen while live no longer takes CPU away from OBS.
+- A delay longer than your buffer can hold no longer replays its screen
+  each time the buffer stretches.
+
 ## [0.2.0] - Polish, stability, and a friendlier first run
 
 ### Setup

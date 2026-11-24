@@ -520,7 +520,7 @@ pub enum AudioEgress {
 /// HEVC/AV1 Enhanced configs, non-seq-header tags, ManyTracks bundles,
 /// or truncated input). Best-effort and fully bounds-checked - never
 /// panics on hostile / partial bytes.
-fn avc_config_record(payload: &[u8]) -> Option<&[u8]> {
+pub(crate) fn avc_config_record(payload: &[u8]) -> Option<&[u8]> {
     if payload.is_empty() {
         return None;
     }
@@ -823,7 +823,7 @@ pub fn detect_vertical_primary_track(
 
 /// Remove H.264 emulation-prevention bytes (0x00 00 03 -> 0x00 00) so the
 /// SPS RBSP can be Exp-Golomb decoded directly.
-fn strip_emulation_prevention(nal: &[u8]) -> Vec<u8> {
+pub(crate) fn strip_emulation_prevention(nal: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(nal.len());
     let mut zeros = 0u32;
     for &b in nal {
@@ -844,24 +844,24 @@ fn strip_emulation_prevention(nal: &[u8]) -> Vec<u8> {
 /// Minimal MSB-first bit reader for SPS parsing. Every read is bounds
 /// checked and returns `None` past the end, so a truncated SPS aborts the
 /// parse cleanly instead of panicking.
-struct BitReader<'a> {
+pub(crate) struct BitReader<'a> {
     data: &'a [u8],
     bit_pos: usize,
 }
 
 impl<'a> BitReader<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         Self { data, bit_pos: 0 }
     }
 
-    fn read_bit(&mut self) -> Option<u32> {
+    pub(crate) fn read_bit(&mut self) -> Option<u32> {
         let byte = self.data.get(self.bit_pos / 8)?;
         let shift = 7 - (self.bit_pos % 8);
         self.bit_pos += 1;
         Some(((byte >> shift) & 1) as u32)
     }
 
-    fn read_bits(&mut self, n: u32) -> Option<u32> {
+    pub(crate) fn read_bits(&mut self, n: u32) -> Option<u32> {
         // Cap at 32 so a corrupt length can't loop unboundedly.
         if n > 32 {
             return None;
@@ -875,7 +875,7 @@ impl<'a> BitReader<'a> {
 
     /// Unsigned Exp-Golomb. The leading-zero count is capped at 31 so
     /// malformed input can't spin forever.
-    fn read_ue(&mut self) -> Option<u32> {
+    pub(crate) fn read_ue(&mut self) -> Option<u32> {
         let mut leading_zeros = 0u32;
         while self.read_bit()? == 0 {
             leading_zeros += 1;
@@ -891,7 +891,7 @@ impl<'a> BitReader<'a> {
     }
 
     /// Signed Exp-Golomb.
-    fn read_se(&mut self) -> Option<i32> {
+    pub(crate) fn read_se(&mut self) -> Option<i32> {
         let k = self.read_ue()?;
         // Map 0,1,2,3,... -> 0,+1,-1,+2,...
         let val = k.div_ceil(2) as i32;
@@ -899,7 +899,7 @@ impl<'a> BitReader<'a> {
     }
 
     /// Skip a scaling list per H.264 7.3.2.1.1.1 without storing it.
-    fn skip_scaling_list(&mut self, size: u32) -> Option<()> {
+    pub(crate) fn skip_scaling_list(&mut self, size: u32) -> Option<()> {
         let mut last_scale = 8i32;
         let mut next_scale = 8i32;
         for _ in 0..size {

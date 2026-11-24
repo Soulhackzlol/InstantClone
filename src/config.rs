@@ -6,6 +6,7 @@
 //! For wire transport (web UI), `to_json` emits a small JSON object.
 
 use crate::crash_protection::{self, CrashProtection};
+use crate::delay_transition::{self, DelayTransition};
 use crate::integrations::model::{DiscordChannel, Integration, PhoneConnection, MAX_INTEGRATIONS};
 use crate::json;
 use std::collections::BTreeMap;
@@ -178,6 +179,9 @@ pub struct Settings {
     /// Keep destinations live on a reconnect screen when OBS crashes.
     /// Off by default. See `crate::crash_protection`.
     pub crash_protection: CrashProtection,
+    /// A screen instead of a jump back when a delay turns on. Off by
+    /// default. See `crate::delay_transition`.
+    pub delay_transition: DelayTransition,
     /// Integrations (alerts, chat commands, automations). Each is saved as
     /// one `integration.<id>=<json>` line. See `crate::integrations`.
     pub integrations: Vec<Integration>,
@@ -1043,6 +1047,7 @@ impl Settings {
             midi: MidiBindings::default(),
             midi_device: String::new(),
             crash_protection: CrashProtection::default(),
+            delay_transition: DelayTransition::default(),
             integrations: Vec::new(),
             user_values: Vec::new(),
             discord_channels: Vec::new(),
@@ -1408,6 +1413,7 @@ impl Settings {
         }
         // Crash protection: only fields that differ from the default.
         self.crash_protection.write_lines(&mut f)?;
+        self.delay_transition.write_lines(&mut f)?;
         self.write_integration_lines(&mut f)?;
         for (i, p) in self.profiles.iter().enumerate() {
             writeln!(f, "profile.{}.name={}", i, one_line(&p.name))?;
@@ -1567,6 +1573,10 @@ impl Settings {
             k if k.starts_with(crash_protection::KEY_PREFIX) => {
                 self.crash_protection
                     .set(&k[crash_protection::KEY_PREFIX.len()..], value);
+            }
+            k if k.starts_with(delay_transition::KEY_PREFIX) => {
+                self.delay_transition
+                    .set(&k[delay_transition::KEY_PREFIX.len()..], value);
             }
             "integrations_migrated" => self.integrations_migrated = value == "true",
             k if k.starts_with("integration.") => self.load_integration(value),
@@ -1874,7 +1884,7 @@ impl Settings {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"update_tray_notify":{utn},"tray_color":{tc},"tray_color_choice":{tcc},"tray_colors":[{tcs}],"open_dashboard_on_launch":{odol},"ui_language":{ul},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"twitch_client_id":{tci},"twitch_app_built_in":{tbi},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"update_tray_notify":{utn},"tray_color":{tc},"tray_color_choice":{tcc},"tray_colors":[{tcs}],"open_dashboard_on_launch":{odol},"ui_language":{ul},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"delay_transition":{dt_screen},"twitch_client_id":{tci},"twitch_app_built_in":{tbi},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
             ik = json_str(ik_shown),
@@ -1911,6 +1921,7 @@ impl Settings {
             tci = json_str(&self.twitch_client_id),
             tbi = !crate::integrations::twitch::default_client_id().is_empty(),
             cp = self.crash_protection.to_json(),
+            dt_screen = self.delay_transition.to_json(),
             dests = dests,
         )
     }
@@ -4075,6 +4086,17 @@ Name@x"
                 headline: "Back in a sec".into(),
                 subline: "OBS is restarting".into(),
                 every_disconnect: true,
+            },
+            delay_transition: crate::delay_transition::DelayTransition {
+                enabled: true,
+                theme: crate::crash_protection::SlateTheme::Halftone,
+                accent: crate::slate::Rgb::new(0x7e, 0xe0, 0x6b),
+                background: Some(crate::slate::Rgb::new(0x10, 0x10, 0x10)),
+                headline: "Hold tight".into(),
+                subline: "Delay incoming".into(),
+                catch_up: true,
+                catch_up_headline: "Skipping ahead".into(),
+                catch_up_subline: "Down to {delay}".into(),
             },
             integrations: vec![
                 crate::integrations::presets::build("crash_alert", "alerts1".into(), "mods")

@@ -1,0 +1,15 @@
+<!-- Full-size view of a screen (Crash protection, Delay transition): the
+     loop at 1080p, from the stream's own encoder (screen-preview.js). -->
+<div class="ic-modal" id="screen-full" hidden role="dialog" aria-modal="true" aria-labelledby="screen-full-title">
+  <div class="ic-modal-backdrop" onclick="screenCloseFull()"></div>
+  <div class="screen-full-card">
+    <div class="screen-full-head">
+      <span class="screen-full-title" id="screen-full-title">Full size, as viewers get it</span>
+      <button class="ic-btn-tiny" id="screen-full-close" onclick="screenCloseFull()" title="Close (Esc)" aria-label="Close">✕</button>
+    </div>
+    <div class="screen-full-stage" id="screen-full-stage">
+      <video id="screen-full-video" muted loop playsinline controls hidden></video>
+      <span class="screen-full-wait" id="screen-full-wait"></span>
+    </div>
+  </div>
+</div>

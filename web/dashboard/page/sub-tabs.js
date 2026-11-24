@@ -16,13 +16,13 @@ function overlaySubShown(sub){
 function goNetworkSettings(){ showTab('system'); showSubTab('system', 'access'); }
 // Sub-tabs that were renamed or merged, so a remembered tab or an old link
 // still lands in the right place.
-const SUBTAB_MOVED = {behavior:'general', buffer:'general', network:'access', notifications:'alerts', diagnostics:'alerts', overlays:'delay'};
+const SUBTAB_MOVED = {behavior:'general', buffer:'general', network:'access', notifications:'alerts', diagnostics:'alerts', overlays:'delay', crash:'extras', transition:'extras', screens:'extras'};
 
 function showSubTab(paneName, subName){
   const pane = document.querySelector(`.tab-pane[data-pane="${paneName}"]`);
   if (!pane) return;
   subName = SUBTAB_MOVED[subName] || subName;
-  pane.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('on', t.dataset.subtab === subName));
+  pane.querySelectorAll('.sub-tab[data-subtab]').forEach(t => t.classList.toggle('on', t.dataset.subtab === subName));
   pane.querySelectorAll('.sub-pane').forEach(p => p.hidden = p.dataset.subpane !== subName);
   moveSubTabInd(pane);
   staggerIn(pane.querySelector(`.sub-pane[data-subpane="${subName}"]`));
@@ -33,15 +33,19 @@ function showSubTab(paneName, subName){
   updateSaveBar();
   if (subName === 'about') aboutMaybeAutoCheck();
   if (subName === 'twitch') refreshSysVodScript();
+  // Its own strip can only measure itself once it shows.
+  if (subName === 'extras') screensShow(screensCurrent());
 }
+// The pane's own strip. A strip inside a section (System > Extras) has
+// buttons without data-subtab and moves its own indicator.
 function moveSubTabInd(pane){
-  const cur = pane.querySelector('.sub-tab.on'); if (!cur) return;
-  const ind = pane.querySelector('.sub-tab-ind'); if (!ind) return;
+  const cur = pane.querySelector('.sub-tab.on[data-subtab]'); if (!cur) return;
+  const ind = cur.parentElement.querySelector('.sub-tab-ind'); if (!ind) return;
   ind.style.left = cur.offsetLeft + 'px';
   ind.style.width = cur.offsetWidth + 'px';
   centerInStrip(cur);
 }
-$$('.sub-tab').forEach(t => {
+$$('.sub-tab[data-subtab]').forEach(t => {
   t.addEventListener('click', e => {
     const pane = e.currentTarget.closest('.tab-pane');
     if (pane && !e.currentTarget.classList.contains('on')) showSubTab(pane.dataset.pane, e.currentTarget.dataset.subtab);
@@ -60,7 +64,7 @@ window.addEventListener('resize', () => {
     if (!saved || !pane.querySelector(`.sub-tab[data-subtab="${saved}"]`)) return;
     // Classes only: this runs while the page script is still loading, so
     // the per-tab hooks in showSubTab wait for the first real switch.
-    pane.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('on', t.dataset.subtab === saved));
+    pane.querySelectorAll('.sub-tab[data-subtab]').forEach(t => t.classList.toggle('on', t.dataset.subtab === saved));
     pane.querySelectorAll('.sub-pane').forEach(p => p.hidden = p.dataset.subpane !== saved);
     pane.querySelectorAll('[data-ovact]').forEach(el => { el.hidden = el.dataset.ovact !== saved; });
   });

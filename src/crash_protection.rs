@@ -21,7 +21,7 @@ const SUBLINE_DEFAULT: &str = "The stream will be back in a moment";
 pub const KEY_PREFIX: &str = "crash_protection.";
 
 /// Look of the reconnect screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SlateTheme {
     /// Minimal centred text with three pulsing dots.
     Whisper,
@@ -34,11 +34,31 @@ pub enum SlateTheme {
     /// Broadcast lower third: text on the left with an accent bar and a
     /// sliding progress stripe.
     Studio,
+    /// Soft glows in the accent and two neighbouring hues drifting round a
+    /// calm centre.
+    Aurora,
+    /// A soft ring of light breathing round the text, a brighter arc
+    /// travelling along it.
+    Halo,
+    /// Slow diagonal swells of light rolling across, calm round the text.
+    Tide,
+    /// Smoke printed as halftone dots, curling slowly.
+    Halftone,
+    /// A fine grid of still dots lit by two wandering lights.
+    Lattice,
+    /// Sparks drifting up from a low glow.
+    Embers,
 }
 
 impl SlateTheme {
     /// Every theme, in the order the dashboard offers them.
-    pub const ALL: [SlateTheme; 5] = [
+    pub const ALL: [SlateTheme; 11] = [
+        SlateTheme::Aurora,
+        SlateTheme::Halo,
+        SlateTheme::Tide,
+        SlateTheme::Halftone,
+        SlateTheme::Lattice,
+        SlateTheme::Embers,
         SlateTheme::Whisper,
         SlateTheme::Beacon,
         SlateTheme::Orbit,
@@ -53,6 +73,12 @@ impl SlateTheme {
             SlateTheme::Beacon => "beacon",
             SlateTheme::Orbit => "orbit",
             SlateTheme::Studio => "studio",
+            SlateTheme::Aurora => "aurora",
+            SlateTheme::Halo => "halo",
+            SlateTheme::Tide => "tide",
+            SlateTheme::Halftone => "halftone",
+            SlateTheme::Lattice => "lattice",
+            SlateTheme::Embers => "embers",
         }
     }
 
@@ -64,10 +90,16 @@ impl SlateTheme {
             SlateTheme::Beacon => "Beacon",
             SlateTheme::Orbit => "Orbit",
             SlateTheme::Studio => "Studio",
+            SlateTheme::Aurora => "Aurora",
+            SlateTheme::Halo => "Halo",
+            SlateTheme::Tide => "Tide",
+            SlateTheme::Halftone => "Halftone",
+            SlateTheme::Lattice => "Lattice",
+            SlateTheme::Embers => "Embers",
         }
     }
 
-    fn from_id(id: &str) -> Option<Self> {
+    pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|theme| theme.id() == id)
     }
 
@@ -79,9 +111,74 @@ impl SlateTheme {
             SlateTheme::Beacon => Rgb::new(0x0b, 0x12, 0x16),
             SlateTheme::Orbit => Rgb::new(0x10, 0x10, 0x16),
             SlateTheme::Studio => Rgb::new(0x0d, 0x10, 0x18),
+            SlateTheme::Aurora => Rgb::new(0x0a, 0x0c, 0x12),
+            SlateTheme::Halo => Rgb::new(0x0b, 0x0b, 0x10),
+            SlateTheme::Tide => Rgb::new(0x09, 0x0e, 0x14),
+            SlateTheme::Halftone => Rgb::new(0x07, 0x07, 0x09),
+            SlateTheme::Lattice => Rgb::new(0x0a, 0x0b, 0x10),
+            SlateTheme::Embers => Rgb::new(0x0c, 0x0a, 0x0e),
         }
     }
+
+    /// Whether the theme paints soft light, fine detail or both (glows,
+    /// dots, sparks) moving all through the loop: those loop over several
+    /// keyframe intervals and take seconds to build. The others move a few
+    /// shapes over flat colour, loop in one interval and build in a
+    /// fraction of a second.
+    pub fn is_soft(self) -> bool {
+        !matches!(
+            self,
+            SlateTheme::Whisper
+                | SlateTheme::Arcade
+                | SlateTheme::Beacon
+                | SlateTheme::Orbit
+                | SlateTheme::Studio
+        )
+    }
+
+    /// How far a decoded sample may sit from the render (of 255). Every
+    /// theme moves smoothly, so every one has some: coded exactly, each
+    /// frame of a glow fading would redraw its blocks in full.
+    pub fn tolerance(self) -> u8 {
+        match self {
+            SlateTheme::Halftone => HALFTONE_TOLERANCE,
+            SlateTheme::Lattice => LATTICE_TOLERANCE,
+            _ => SOFT_TOLERANCE,
+        }
+    }
+
+    /// How many 2 s keyframe intervals one loop of the animation spans:
+    /// soft light moves slowly, so it needs a longer loop to look calm.
+    pub fn loop_intervals(self) -> usize {
+        if self.is_soft() {
+            SOFT_LOOP_INTERVALS
+        } else {
+            1
+        }
+    }
+
+    /// The flat theme a style not built yet stands in with: built in a
+    /// fraction of a second.
+    pub const STAND_IN: SlateTheme = SlateTheme::Whisper;
+
+    /// The flat theme a soft one stands in with while its loop is still
+    /// being built.
+    pub fn quick_stand_in(self) -> Option<SlateTheme> {
+        self.is_soft().then_some(Self::STAND_IN)
+    }
 }
+
+/// Two levels of 255: below what a viewer can see on a gradient, and what
+/// keeps a soft-light 1080p screen near 370 to 500 kbps in HEVC and 1100 to
+/// 1600 in H.264 (measured, `slate::tests::measure_loops`).
+const SOFT_TOLERANCE: u8 = 2;
+/// Hard-edged dots hide far bigger errors than soft light does (flat
+/// background between them stays within a level, see `slate::fidelity`),
+/// and coding their edges closely costs several times the bits.
+const HALFTONE_TOLERANCE: u8 = 8;
+const LATTICE_TOLERANCE: u8 = 6;
+/// Four 2 s intervals: an 8 s loop.
+const SOFT_LOOP_INTERVALS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrashProtection {
@@ -231,13 +328,13 @@ impl CrashProtection {
 
 /// Checkbox values arrive as "true"/"false" or "on"/"" depending on the
 /// caller, the same convention the other boolean settings use.
-fn is_truthy(value: &str) -> bool {
+pub(crate) fn is_truthy(value: &str) -> bool {
     !matches!(value, "" | "false" | "0" | "off")
 }
 
 /// Screen text: no control characters (the config format is line-based),
 /// surrounding whitespace trimmed, capped to what fits on the screen.
-fn sanitize_text(value: &str, max_chars: usize) -> String {
+pub(crate) fn sanitize_text(value: &str, max_chars: usize) -> String {
     value
         .chars()
         .filter(|c| !c.is_control())

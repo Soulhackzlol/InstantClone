@@ -1,6 +1,6 @@
 [package]
 name = "instantclone"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["s1moscs"]
 license = "GPL-3.0-or-later"
@@ -35,7 +35,11 @@ bytes = "1"
 # the Windows schannel that's already in the process, so we don't ship
 # rustls + ring (which would add ~1.4 MB to the binary for one POST).
 # Default features off so we don't pull gzip / json / cookies we don't use.
-ureq = { version = "3", default-features = false, features = ["native-tls"] }
+# `native-tls-no-default` rather than `native-tls`: the latter also bundles
+# ~150 Mozilla root certificates we never use (every agent reads the OS
+# store, see src/https.rs), and that embedded certificate blob is one of the
+# things antivirus scanners score against the exe (issue #101).
+ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
 native-tls = "0.2"
 
 # Async TLS for RTMPS egress (Kick and any rtmps:// destination). Wraps
@@ -80,7 +84,3 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Build-time only: minify + gzip the dashboard HTML so the binary embeds
-# only the compressed bytes. Does NOT add to the release binary.
-[build-dependencies]
-flate2 = "1"

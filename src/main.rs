@@ -50,6 +50,7 @@ mod controller;
 mod crash_hold;
 mod crash_protection;
 mod crypto;
+mod delay_transition;
 mod diagnostics;
 mod egress_failure;
 mod h264;
@@ -71,6 +72,8 @@ mod revisions;
 mod rtmp;
 mod self_update;
 mod sha256;
+#[cfg(windows)]
+mod shell_link;
 mod sink;
 mod slate;
 mod streamlabs;
@@ -89,7 +92,6 @@ mod winget_record;
 
 use crate::config::Settings;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -863,6 +865,34 @@ fn idle_reason(has_destinations: bool, obs_live: bool) -> &'static str {
     }
 }
 
+/// The delay transition's screens worth having encoded ahead, the
+/// likeliest first: the delay going on at the armed delay and the catch-up
+/// screen to no delay, then each profile's.
+fn transition_screens(
+    ctrl: &controller::Controller,
+    settings: &delay_transition::DelayTransition,
+    profiles: &[config::DelayProfile],
+) -> Vec<crash_protection::CrashProtection> {
+    let into: Vec<_> = match settings.enabled {
+        true => ctrl.transition_delays(profiles),
+        false => Vec::new(),
+    }
+    .into_iter()
+    // Words that fit the next change: from the delay on now.
+    .map(|delay_ms| ctrl.transition_screen(delay_ms, ctrl.target_delay_ms() > 0))
+    .collect();
+    let catch_up: Vec<_> = match settings.catch_up {
+        true => ctrl.catch_up_delays(profiles),
+        false => Vec::new(),
+    }
+    .into_iter()
+    .map(|delay_ms| ctrl.catch_up_screen(delay_ms))
+    .collect();
+    let (into_first, into_rest) = into.split_at(into.len().min(1));
+    let (catch_up_first, catch_up_rest) = catch_up.split_at(catch_up.len().min(1));
+    [into_first, catch_up_first, into_rest, catch_up_rest].concat()
+}
+
 /// One egress pump per destination. Owns a map { dest_id → (url, JoinHandle) }
 /// and diffs it against the active-destinations list whenever settings
 /// change. Adds/removes/restarts as needed.
@@ -918,6 +948,8 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // decides whether to open a hold the instant OBS drops.
         let crash_settings = rx.borrow().crash_protection.clone();
         ctrl.update_crash_protection(crash_settings.clone());
+        let transition_settings = rx.borrow().delay_transition.clone();
+        ctrl.update_delay_transition(transition_settings.clone());
 
         // Keep the managed test-sink child in sync with the desired set
         // BEFORE the pump diff below, so a freshly enabled sink
@@ -1192,9 +1224,43 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         ctrl.check_ingest_freeze();
         if ingest_alive && crash_settings.enabled {
             for id in running.keys() {
-                crash_hold::prebuild_for(&ctrl, &ctrl.destination_state(id), &crash_settings);
+                let dest = ctrl.destination_state(id);
+                crash_hold::prebuild_for(&ctrl, &dest, &ctrl.slate_cache, &crash_settings);
             }
         }
+        // Likewise the delay transition's screens, so a delay turned on, up,
+        // down or off plays its own at once: one per delay likely to come
+        // when its words name it, the likeliest first and one at a time.
+        // The dashboard is told whether they are all ready; with none to
+        // build (no delay armed or in a profile to name, or no destination
+        // whose video a screen can stand in for) it is told nothing.
+        let screens = match ingest_alive && transition_settings.any_screen() && !running.is_empty()
+        {
+            true => transition_screens(&ctrl, &transition_settings, &rx.borrow().profiles),
+            false => Vec::new(),
+        };
+        let mut screens_ready = None;
+        if !screens.is_empty() {
+            let (mut all_ready, mut shapes) = (true, std::collections::HashSet::new());
+            for id in running.keys() {
+                match crash_hold::screen_targets(&ctrl, &ctrl.destination_state(id)) {
+                    // Its video isn't known yet: nothing is ready for it.
+                    None => all_ready = false,
+                    Some(targets) => {
+                        shapes.extend(targets.iter().copied());
+                        all_ready &= crash_hold::prebuild_screens(
+                            &ctrl.transition_cache,
+                            &screens,
+                            &targets,
+                        );
+                    }
+                }
+            }
+            ctrl.transition_cache
+                .keep_room_for(screens.len() * shapes.len());
+            screens_ready = (!shapes.is_empty() || !all_ready).then_some(all_ready);
+        }
+        ctrl.set_transition_screens_ready(screens_ready);
 
         let idle = running
             .is_empty()
@@ -1879,20 +1945,58 @@ async fn stop_signal() -> &'static str {
     "ctrl-c"
 }
 
+/// Open `url` in the default browser.
+///
+/// Windows asks the shell directly rather than going through a hidden
+/// `cmd /c start`: antivirus engines score an unsigned app that spawns
+/// hidden shells as malware (issue #101). Runs on its own thread because
+/// the shell call can take a moment and needs COM set up on its thread.
+#[cfg(windows)]
 fn open_browser(url: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt as _;
-        // A release build has no console, so `cmd` would flash one open.
-        let _ = Command::new("cmd")
-            .args(["/c", "start", "", url])
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-            .spawn();
-    }
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        let verb: Vec<u16> = "open\0".encode_utf16().collect();
+        let target: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        // ShellExecute returns a value above 32 on success (its documented
+        // contract, kept from 16-bit Windows).
+        let result = unsafe {
+            CoInitializeEx(
+                std::ptr::null(),
+                (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+            );
+            let result = ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            ) as isize;
+            CoUninitialize();
+            result
+        };
+        if result <= 32 {
+            log_line!("[browser] could not open {url} (ShellExecute code {result})");
+        }
+    });
+}
+
+/// Open `url` in the default browser.
+#[cfg(unix)]
+fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(url).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(url).spawn();
+    let opener = "open";
+    #[cfg(not(target_os = "macos"))]
+    let opener = "xdg-open";
+    if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
+        log_line!("[browser] could not open {url} ({opener}: {e})");
+    }
 }
 
 /// Create the overlays directory (if missing) and drop the folder README

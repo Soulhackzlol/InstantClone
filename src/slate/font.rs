@@ -42,6 +42,17 @@ pub struct Line {
     pub align: Align,
 }
 
+/// How wide `text` is set as `line`, in pixels.
+pub fn width(text: &str, line: Line) -> f32 {
+    let Some(font) = font_for(line.weight) else {
+        return 0.0;
+    };
+    let scale = line.size_px / font.units_per_em;
+    text.chars()
+        .map(|c| font.advance(font.glyph_id(c)) * scale)
+        .sum()
+}
+
 /// Draw `text` with its baseline at `baseline_y`, centred on `x` or
 /// starting at it, as `line.align` says.
 pub fn draw(canvas: &mut Canvas, text: &str, x: f32, baseline_y: f32, line: Line, color: Rgb) {
