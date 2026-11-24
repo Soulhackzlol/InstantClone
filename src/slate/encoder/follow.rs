@@ -21,6 +21,9 @@ pub struct StreamSps {
     log2_max_frame_num: u32,
     /// None for order type 2; the count's bits for type 0.
     log2_max_order_lsb: Option<u32>,
+    /// How many reference pictures a decoder keeps: the picture the wipe
+    /// starts from has to be one of them.
+    max_num_ref_frames: u32,
     pub width_mbs: usize,
     pub height_mbs: usize,
 }
@@ -86,6 +89,7 @@ pub fn read_sps(nal: &[u8]) -> Option<StreamSps> {
         sps_id,
         log2_max_frame_num,
         log2_max_order_lsb,
+        max_num_ref_frames,
         width_mbs,
         height_mbs,
     })
@@ -205,7 +209,9 @@ impl Follower {
 
     /// How a wipe carries on from the pictures taken in, with a PPS id
     /// none of `stream_pps_ids` (nor the screen's own) uses. `None` before
-    /// a keyframe, or when the stream's order counts leave no room.
+    /// a keyframe, when the stream's order counts leave no room, or when
+    /// the picture viewers see last has already left the decoder's
+    /// reference pictures.
     pub fn numbering(&self, stream_pps_ids: &[u32]) -> Option<StreamNumbering> {
         let last_reference = self.last_reference?;
         let pps_id =
@@ -231,13 +237,79 @@ impl Follower {
         // order (with B pictures that need not be the last one sent).
         let (shown_last, _) = *self.references.iter().max_by_key(|(_, order)| *order)?;
         let first_frame_num = (last_reference + 1) % max_frame_num;
+        let frozen_back = (first_frame_num + max_frame_num - shown_last) % max_frame_num;
+        // Each reference picture takes the next frame_num, and the decoder
+        // keeps the latest max_num_ref_frames of them (sliding window).
+        if frozen_back > self.sps.max_num_ref_frames {
+            return None;
+        }
         Some(StreamNumbering {
             sps_id: self.sps.sps_id,
             pps_id,
             log2_max_frame_num: self.sps.log2_max_frame_num,
             first_frame_num,
-            frozen_back: (first_frame_num + max_frame_num - shown_last) % max_frame_num,
+            frozen_back,
             order,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::slate::bitstream::{nal_unit, BitWriter, NAL_IDR_SLICE as IDR, NAL_SLICE as SLICE};
+
+    /// A Main profile SPS keeping `max_num_ref_frames` references, with
+    /// 4-bit frame_nums and 6-bit order counts.
+    fn sps(max_num_ref_frames: u32) -> Vec<u8> {
+        let mut w = BitWriter::new();
+        w.bits(77, 8); // profile_idc: Main
+        w.bits(0, 16); // constraint flags, level_idc
+        w.ue(0); // seq_parameter_set_id
+        w.ue(0); // log2_max_frame_num_minus4
+        w.ue(0); // pic_order_cnt_type
+        w.ue(2); // log2_max_pic_order_cnt_lsb_minus4
+        w.ue(max_num_ref_frames);
+        w.bit(false); // gaps_in_frame_num_value_allowed_flag
+        w.ue(19); // pic_width_in_mbs_minus1
+        w.ue(11); // pic_height_in_map_units_minus1
+        w.bit(true); // frame_mbs_only_flag
+        nal_unit(3, NAL_SPS, &w.finish())
+    }
+
+    /// A reference picture's slice header, as far as `Follower` reads it.
+    fn slice(nal_type: u8, frame_num: u32, order_lsb: u32) -> Vec<u8> {
+        let mut w = BitWriter::new();
+        w.ue(0); // first_mb_in_slice
+        w.ue(if nal_type == IDR { 7 } else { 5 }); // slice_type
+        w.ue(0); // pic_parameter_set_id
+        w.bits(frame_num, 4);
+        if nal_type == IDR {
+            w.ue(0); // idr_pic_id
+        }
+        w.bits(order_lsb, 6);
+        nal_unit(2, nal_type, &w.finish())
+    }
+
+    /// Keyframe, then a P picture shown last, then a B picture kept as a
+    /// reference after it: the wipe starts two references back.
+    fn followed(max_num_ref_frames: u32) -> Option<StreamNumbering> {
+        let mut follower = Follower::new(read_sps(&sps(max_num_ref_frames))?);
+        for nal in [slice(IDR, 0, 0), slice(SLICE, 1, 8), slice(SLICE, 2, 4)] {
+            follower.nal(&nal)?;
+        }
+        follower.numbering(&[0])
+    }
+
+    #[test]
+    fn the_wipe_starts_from_the_picture_shown_last() {
+        let numbering = followed(2).expect("both references kept");
+        assert_eq!(numbering.first_frame_num, 3);
+        assert_eq!(numbering.frozen_back, 2);
+    }
+
+    #[test]
+    fn no_wipe_once_the_picture_shown_last_has_left_the_decoder() {
+        assert_eq!(followed(1), None, "one reference kept: only the B picture");
     }
 }

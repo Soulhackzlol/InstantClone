@@ -164,7 +164,7 @@ pub fn build_loop(
     shape: StreamShape,
     codec: SlateCodec,
 ) -> Result<SlateLoop, UnsupportedShape> {
-    build_intervals(settings, shape, codec, true)
+    build_intervals(settings, (shape, codec), Extent::Loop { is_parallel: true })
 }
 
 /// `build_loop` one interval after another on the calling thread, for a
@@ -175,26 +175,60 @@ pub fn build_loop_quietly(
     shape: StreamShape,
     codec: SlateCodec,
 ) -> Result<SlateLoop, UnsupportedShape> {
-    build_intervals(settings, shape, codec, false)
+    build_intervals(
+        settings,
+        (shape, codec),
+        Extent::Loop { is_parallel: false },
+    )
+}
+
+/// Only the first `frames` pictures of the loop, moving at the loop's own
+/// pace, as one keyframe interval: for a screen that plays for a moment and
+/// never loops, at a fraction of a loop's encode (an 8 s soft-light loop
+/// is 240 pictures). Built on the calling thread like `build_loop_quietly`.
+pub fn build_moment(
+    settings: &CrashProtection,
+    shape: StreamShape,
+    codec: SlateCodec,
+    frames: usize,
+) -> Result<SlateLoop, UnsupportedShape> {
+    build_intervals(settings, (shape, codec), Extent::Moment { frames })
+}
+
+/// How much of the screen's animation a build encodes.
+#[derive(Debug, Clone, Copy)]
+enum Extent {
+    /// The whole loop, its intervals side by side on their own threads or
+    /// one after another.
+    Loop { is_parallel: bool },
+    /// The first pictures of the loop, as one interval.
+    Moment { frames: usize },
 }
 
 fn build_intervals(
     settings: &CrashProtection,
-    shape: StreamShape,
-    codec: SlateCodec,
-    is_parallel: bool,
+    (shape, codec): (StreamShape, SlateCodec),
+    extent: Extent,
 ) -> Result<SlateLoop, UnsupportedShape> {
     let side_ok = |side: usize| (MIN_SIDE..=MAX_SIDE).contains(&side) && side.is_multiple_of(2);
     if !side_ok(shape.width) || !side_ok(shape.height) || !(1..=MAX_FPS).contains(&shape.fps) {
         return Err(UnsupportedShape(shape));
     }
     let style = screen_style(settings);
-    let frames = frames_per_interval(shape.fps);
-    let count = settings.theme.loop_intervals();
+    let interval_frames = frames_per_interval(shape.fps);
+    let loop_frames = settings.theme.loop_intervals() * interval_frames;
+    let (count, frames, is_parallel) = match extent {
+        Extent::Loop { is_parallel } => (
+            settings.theme.loop_intervals(),
+            interval_frames,
+            is_parallel,
+        ),
+        Extent::Moment { frames } => (1, frames.clamp(1, interval_frames), false),
+    };
     let plan = |index: usize| IntervalPlan {
         first_frame: index * frames,
         frames,
-        loop_frames: count * frames,
+        loop_frames,
         tolerance: settings.theme.tolerance(),
     };
     if !is_parallel {
@@ -414,6 +448,27 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// A screen built for a moment is the loop's first pictures, at the
+    /// loop's own pace: the same samples, only fewer of them.
+    #[test]
+    fn a_moment_is_the_start_of_the_loop() {
+        let shape = StreamShape {
+            width: 320,
+            height: 180,
+            fps: 30,
+        };
+        for codec in CODECS {
+            let settings = settings(SlateTheme::Aurora);
+            let whole = build_loop(&settings, shape, codec).unwrap();
+            let moment = build_moment(&settings, shape, codec, 30).unwrap();
+            assert_eq!(moment.intervals.len(), 1, "{codec:?}");
+            let (start, first) = (&moment.intervals[0], &whole.intervals[0]);
+            assert_eq!(start.keyframes, first.keyframes, "{codec:?}");
+            assert_eq!(start.deltas.len(), 29, "{codec:?}");
+            assert_eq!(start.deltas[..], first.deltas[..29], "{codec:?}");
         }
     }
 
@@ -1262,6 +1317,18 @@ mod tests {
                     .map(|i| i.keyframes[0].len() + i.deltas.iter().map(Vec::len).sum::<usize>())
                     .sum();
                 let keyframe = slate.intervals[0].keyframes[0].len();
+                if std::env::var("QUIET").is_ok() {
+                    let started = std::time::Instant::now();
+                    build_loop_quietly(&settings(theme), shape, codec).unwrap();
+                    log_line!(
+                        "{theme:?} {codec:?}: built quietly in {:?}",
+                        started.elapsed()
+                    );
+                    let started = std::time::Instant::now();
+                    let frames = crate::crash_hold::SLATE_FPS as usize;
+                    build_moment(&settings(theme), shape, codec, frames).unwrap();
+                    log_line!("{theme:?} {codec:?}: a moment in {:?}", started.elapsed());
+                }
                 log_line!(
                     "{theme:?} {codec:?}: {} kbps, keyframe {} KB, built in {:?}",
                     bytes * 8 / (slate.intervals.len() * KEYFRAME_INTERVAL_MS),

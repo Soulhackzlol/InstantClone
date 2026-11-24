@@ -1656,7 +1656,7 @@ fn state_json(
     let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"rev":{rev},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"transition_screens_ready":{tsr},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"rev":{rev},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         // The dock's events list changed: it fetches the list again.
         fd = ctrl.integrations().map_or(0, |h| h.feed.changes()),
@@ -1666,6 +1666,11 @@ fn state_json(
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
         hold = hold_json(ctrl),
+        // Whether the delay transition's screens are encoded for the live
+        // destinations yet (null while none are being kept).
+        tsr = ctrl
+            .transition_screens_ready()
+            .map_or_else(|| "null".to_string(), |ready| ready.to_string()),
         tail = ctrl.tail_left().map_or(0, |left| left.as_millis()),
         cw = json_escape_quoted(&compat_warning),
         la = ctrl
@@ -7091,15 +7096,36 @@ mod tests {
                 key: "delay_transition.headline",
                 set: "Be right back",
                 reads_as: "Be right back",
-                reset: "Loading a {delay} delay",
+                reset: "Going back {delay}",
                 read: |s| s.delay_transition.headline.clone(),
             },
             SettableRow {
                 key: "delay_transition.subline",
                 set: "Grab a drink",
                 reads_as: "Grab a drink",
-                reset: "The stream picks up right where it left off",
+                reset: "Turning the delay on",
                 read: |s| s.delay_transition.subline.clone(),
+            },
+            SettableRow {
+                key: "delay_transition.catch_up",
+                set: "on",
+                reads_as: "true",
+                reset: "off",
+                read: |s| s.delay_transition.catch_up.to_string(),
+            },
+            SettableRow {
+                key: "delay_transition.catch_up_headline",
+                set: "Skipping ahead",
+                reads_as: "Skipping ahead",
+                reset: "Going back to the present",
+                read: |s| s.delay_transition.catch_up_headline.clone(),
+            },
+            SettableRow {
+                key: "delay_transition.catch_up_subline",
+                set: "Back to live",
+                reads_as: "Back to live",
+                reset: "Catching up with the stream",
+                read: |s| s.delay_transition.catch_up_subline.clone(),
             },
             SettableRow {
                 key: "crash_protection.hold_secs",

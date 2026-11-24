@@ -103,6 +103,41 @@ function screenDrawThumbs(box, params){
   });
 }
 
+// The accents offered as swatches beside the custom colour.
+const SCREEN_ACCENTS = [['Cyan','#5ac8fa'],['Violet','#9d7bff'],['Lime','#7ee06b'],['Coral','#ff6b6b'],['Amber','#ffb73a']];
+
+// The colour controls of the card whose ids start with `prefix`: accent
+// swatches, a custom accent and a background. Each edit goes to
+// `set({accent})` or `set({background})`, '' meaning the style's own.
+function screenBuildColours(prefix, set){
+  const box = $(prefix + '-swatches'), custom = $(prefix + '-accent').parentElement;
+  SCREEN_ACCENTS.forEach(([name, hex]) => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'crash-swatch';
+    swatch.style.background = hex;
+    swatch.dataset.hex = hex;
+    swatch.title = name;
+    swatch.setAttribute('aria-label', name);
+    swatch.onclick = () => set({accent: hex});
+    box.insertBefore(swatch, custom);
+  });
+  $(prefix + '-accent').oninput = e => set({accent: e.target.value.toLowerCase()});
+  $(prefix + '-bg').oninput = e => set({background: e.target.value.toLowerCase()});
+  $(prefix + '-bg-reset').onclick = () => set({background: ''});
+}
+
+// Show `accent` and `background` in those controls; a background left on
+// the style's own shows as `styleBackground`.
+function screenRenderColours(prefix, {accent, background}, styleBackground){
+  document.querySelectorAll('#' + prefix + '-swatches .crash-swatch')
+    .forEach(b => b.setAttribute('aria-pressed', String(b.dataset.hex === accent)));
+  $(prefix + '-accent').value = accent;
+  $(prefix + '-bg').value = background || styleBackground || '#000000';
+  $(prefix + '-bg-note').hidden = !!background;
+  $(prefix + '-bg-reset').hidden = !background;
+}
+
 // Character counters for the `prefix`-headline and -subline fields, and
 // their "Reset text" once either differs from `defaults`.
 function screenRenderText(prefix, defaults){

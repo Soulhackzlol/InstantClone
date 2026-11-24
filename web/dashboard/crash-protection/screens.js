@@ -37,8 +37,19 @@ function screensMoveInd(){
   ind.style.left = cur.offsetLeft + 'px';
   ind.style.width = cur.offsetWidth + 'px';
 }
+// A tab list: Tab reaches the chosen one, the arrow keys (and Home, End)
+// move between them.
 document.querySelectorAll('.screens-switch .sub-tab').forEach(tab => {
   tab.onclick = () => screensShow(tab.dataset.screenTab);
+  tab.onkeydown = e => {
+    const index = SCREENS.indexOf(tab.dataset.screenTab);
+    const to = {ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: SCREENS.length - 1}[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    const which = SCREENS[(to + SCREENS.length) % SCREENS.length];
+    screensShow(which);
+    document.querySelector('.screens-switch [data-screen-tab="' + which + '"]').focus();
+  };
 });
 window.addEventListener('resize', screensMoveInd);
 (() => {

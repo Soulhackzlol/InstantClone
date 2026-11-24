@@ -14,7 +14,7 @@
 .crash-stage-head,.crash-field-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .crash-label{font-weight:600;font-size:12.5px;color:var(--fg-2)}
 .crash-note{color:var(--fg-3);font-size:11.5px;line-height:1.45}
-.crash-preview-frame{display:grid;place-items:center;background:var(--bg);border:1px solid var(--line);
+.crash-preview-frame{position:relative;display:grid;place-items:center;background:var(--bg);border:1px solid var(--line);
   border-radius:10px;padding:10px;aspect-ratio:16/10}
 .crash-preview{display:block;width:100%;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45);aspect-ratio:16/9;
   background:var(--surface);object-fit:cover}
@@ -22,6 +22,7 @@
 .crash-controls{display:flex;flex-direction:column;gap:18px;min-width:0}
 .crash-field{display:flex;flex-direction:column;gap:8px;min-width:0}
 .crash-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.crash-field[hidden],.crash-seg[hidden]{display:none}
 .crash-seg button{appearance:none;border:0;background:var(--bg-2);color:var(--fg-3);font:inherit;font-size:11.5px;
   font-weight:600;padding:5px 11px;cursor:pointer}
 .crash-seg button[aria-pressed="true"]{background:var(--surface-3);color:var(--accent)}
@@ -42,6 +43,16 @@
 .crash-small-btn{padding:6px 10px;font-size:12px}
 .crash-link{appearance:none;background:none;border:0;padding:0;color:var(--accent);font:inherit;font-size:11.5px;cursor:pointer}
 .crash-link:hover{text-decoration:underline}
+.crash-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:7px}
+.crash-link:focus-visible,.crash-full:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+/* Full size: a quiet control in the preview's corner, like a player's. */
+.crash-full{position:absolute;top:14px;right:14px;z-index:1;display:grid;place-items:center;width:28px;height:28px;
+  padding:0;border-radius:8px;border:1px solid var(--line);background:color-mix(in oklch,var(--bg-2) 72%,transparent);
+  color:var(--fg-3);cursor:pointer;backdrop-filter:blur(8px);
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.crash-full svg{width:14px;height:14px}
+.crash-full:hover{color:var(--fg);border-color:var(--line-2)}
+.crash-full:active{transform:scale(.94)}
 .crash-text-row{position:relative;display:block}
 .crash-text-row .ic-input{padding-right:58px}
 .crash-count{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:10.5px;color:var(--fg-4);pointer-events:none}
@@ -57,9 +68,45 @@
    reach it. */
 .screens-switch{align-self:flex-start;max-width:100%}
 .screen-off{display:none}
-/* The Delay transition card is built from these same pieces. Above each
-   preview: the full-size view and the shape. */
-.crash-stage-tools{display:flex;align-items:center;gap:14px}
+/* The Delay transition card is built from these same pieces, plus: a tile
+   per screen that turns it on and shows it in the chosen style (dimmed
+   while off), the order viewers see it in under the preview, and whether
+   the saved screens are ready on the stream. */
+.dt-moments{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}
+.dt-moment{display:flex;align-items:center;gap:14px;padding:10px 14px 10px 10px;border-radius:12px;cursor:pointer;
+  background:var(--bg-2);border:1px solid var(--line);
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out)}
+.dt-moment:hover{border-color:var(--line-2)}
+.dt-moment:has(.dt-switch:checked){border-color:color-mix(in oklch,var(--accent) 55%,var(--line));
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 22%,transparent) inset}
+.dt-moment-art{flex:none;width:112px;aspect-ratio:16/9;border-radius:7px;background:var(--surface);object-fit:cover;
+  box-shadow:0 4px 14px rgba(0,0,0,.35);filter:saturate(.3) brightness(.65);transition:filter .3s var(--ease-out)}
+.dt-moment:has(.dt-switch:checked) .dt-moment-art{filter:none}
+.dt-moment-text{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+/* The destinations' switch, on a real checkbox so the form reads it. */
+.dt-switch{appearance:none;position:relative;flex:none;width:34px;height:19px;margin:0;padding:0;border-radius:999px;
+  background:var(--surface-3);border:1px solid var(--line);cursor:pointer;
+  transition:background .2s var(--ease-out),border-color .2s var(--ease-out)}
+.dt-switch::before{content:'';position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:999px;
+  background:var(--fg-3);transition:transform .2s var(--ease-spring),background .2s var(--ease-out)}
+.dt-switch:checked{background:color-mix(in oklch,var(--accent) 80%,transparent);border-color:transparent}
+.dt-switch:checked::before{transform:translateX(15px);background:#fff}
+.dt-switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dt-flow{display:grid;grid-template-columns:2fr minmax(76px,1fr) 2fr;gap:6px;margin:4px 0 0;padding:0;list-style:none}
+.dt-flow li{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:11.5px;color:var(--fg-3);white-space:nowrap}
+.dt-flow li:nth-child(2){align-items:center}
+.dt-flow li:last-child{align-items:flex-end}
+.dt-flow-bar{align-self:stretch;height:3px;border-radius:999px;background:var(--line-2)}
+.dt-flow-screen .dt-flow-bar{background:var(--accent)}
+.dt-flow-screen>span:last-child{color:var(--fg-2);font-weight:600}
+.dt-ready{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--fg-2)}
+.dt-ready[hidden]{display:none}
+.dt-ready::before{content:'';flex:none;width:7px;height:7px;border-radius:50%;background:var(--fg-4)}
+.dt-ready[data-state="ready"]::before{background:var(--ok)}
+.dt-ready[data-state="dirty"]{color:var(--warn)}
+.dt-ready[data-state="dirty"]::before{background:var(--warn)}
+.dt-ready[data-state="building"]::before{background:var(--accent);animation:dtPulse 1.4s ease-in-out infinite}
+@keyframes dtPulse{50%{opacity:.35;transform:scale(.75)}}
 /* Full-size view (screen-full.html): the 1080p loop as large as the
    window allows, letterboxed in its own shape. */
 .screen-full-card{position:relative;display:flex;flex-direction:column;gap:10px;max-width:100%;max-height:100%;
@@ -73,6 +120,7 @@
 .screen-full-stage video{display:block;width:100%;height:100%;object-fit:contain}
 .screen-full-stage [hidden]{display:none}
 .screen-full-wait{color:var(--fg-3);font-size:12.5px}
-@media (max-width:820px){.crash-body{grid-template-columns:1fr}.crash-stage{position:static}}
+@media (max-width:820px){.crash-body,.dt-moments{grid-template-columns:1fr}.crash-stage{position:static}}
 @media (max-width:420px){.crash-themes{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (prefers-reduced-motion: reduce){.crash-body{animation:none}.crash-theme:hover,.crash-swatch:hover{transform:none}}
+@media (prefers-reduced-motion: reduce){.crash-body,.dt-ready::before{animation:none}
+  .crash-theme:hover,.crash-swatch:hover,.crash-full:active{transform:none}}

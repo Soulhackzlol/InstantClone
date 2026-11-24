@@ -4090,8 +4090,13 @@ Name@x"
             delay_transition: crate::delay_transition::DelayTransition {
                 enabled: true,
                 theme: crate::crash_protection::SlateTheme::Halftone,
+                accent: crate::slate::Rgb::new(0x7e, 0xe0, 0x6b),
+                background: Some(crate::slate::Rgb::new(0x10, 0x10, 0x10)),
                 headline: "Hold tight".into(),
                 subline: "Delay incoming".into(),
+                catch_up: true,
+                catch_up_headline: "Skipping ahead".into(),
+                catch_up_subline: "Down to {delay}".into(),
             },
             integrations: vec![
                 crate::integrations::presets::build("crash_alert", "alerts1".into(), "mods")

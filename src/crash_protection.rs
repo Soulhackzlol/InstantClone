@@ -157,10 +157,14 @@ impl SlateTheme {
         }
     }
 
+    /// The flat theme a style not built yet stands in with: built in a
+    /// fraction of a second.
+    pub const STAND_IN: SlateTheme = SlateTheme::Whisper;
+
     /// The flat theme a soft one stands in with while its loop is still
     /// being built.
     pub fn quick_stand_in(self) -> Option<SlateTheme> {
-        self.is_soft().then_some(SlateTheme::Whisper)
+        self.is_soft().then_some(Self::STAND_IN)
     }
 }
 

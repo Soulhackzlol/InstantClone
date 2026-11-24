@@ -864,6 +864,33 @@ fn idle_reason(has_destinations: bool, obs_live: bool) -> &'static str {
     }
 }
 
+/// The delay transition's screens worth having encoded ahead, the
+/// likeliest first: the delay going on at the armed delay and the catch-up
+/// screen to no delay, then each profile's.
+fn transition_screens(
+    ctrl: &controller::Controller,
+    settings: &delay_transition::DelayTransition,
+    profiles: &[config::DelayProfile],
+) -> Vec<crash_protection::CrashProtection> {
+    let into: Vec<_> = match settings.enabled {
+        true => ctrl.transition_delays(profiles),
+        false => Vec::new(),
+    }
+    .into_iter()
+    .map(|delay_ms| ctrl.transition_screen(delay_ms))
+    .collect();
+    let catch_up: Vec<_> = match settings.catch_up {
+        true => ctrl.catch_up_delays(profiles),
+        false => Vec::new(),
+    }
+    .into_iter()
+    .map(|delay_ms| ctrl.catch_up_screen(delay_ms))
+    .collect();
+    let (into_first, into_rest) = into.split_at(into.len().min(1));
+    let (catch_up_first, catch_up_rest) = catch_up.split_at(catch_up.len().min(1));
+    [into_first, catch_up_first, into_rest, catch_up_rest].concat()
+}
+
 /// One egress pump per destination. Owns a map { dest_id → (url, JoinHandle) }
 /// and diffs it against the active-destinations list whenever settings
 /// change. Adds/removes/restarts as needed.
@@ -1199,21 +1226,27 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 crash_hold::prebuild_for(&ctrl, &dest, &ctrl.slate_cache, &crash_settings);
             }
         }
-        // Likewise the delay transition's screens, so a delay turned on
-        // plays its own at once: one per delay likely to be turned on when
-        // its words name it, the likeliest first and one at a time.
-        if ingest_alive && transition_settings.enabled {
-            let delays = ctrl.transition_delays(&rx.borrow().profiles);
+        // Likewise the delay transition's screens, so a delay turned on, up,
+        // down or off plays its own at once: one per delay likely to come
+        // when its words name it, the likeliest first and one at a time.
+        // The dashboard is told whether they are all ready; with none to
+        // build (no delay armed or in a profile to name) it is told nothing.
+        let mut screens_ready = None;
+        let screens = match ingest_alive && transition_settings.any_screen() && !running.is_empty()
+        {
+            true => transition_screens(&ctrl, &transition_settings, &rx.borrow().profiles),
+            false => Vec::new(),
+        };
+        if !screens.is_empty() {
+            let mut all_ready = true;
             for id in running.keys() {
-                let dest = ctrl.destination_state(id);
-                for delay_ms in &delays {
-                    let screen = ctrl.transition_screen(*delay_ms);
-                    if !crash_hold::prebuild_for(&ctrl, &dest, &ctrl.transition_cache, &screen) {
-                        break;
-                    }
-                }
+                let targets = crash_hold::screen_targets(&ctrl, &ctrl.destination_state(id));
+                all_ready &=
+                    crash_hold::prebuild_screens(&ctrl.transition_cache, &screens, &targets);
             }
+            screens_ready = Some(all_ready);
         }
+        ctrl.set_transition_screens_ready(screens_ready);
 
         let idle = running
             .is_empty()

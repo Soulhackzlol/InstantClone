@@ -27,15 +27,15 @@
         <div class="crash-stage">
           <div class="crash-stage-head">
             <span class="crash-label">What viewers see</span>
-            <span class="crash-stage-tools">
-              <button type="button" class="crash-link" id="s-cp-full">View full size</button>
-              <span class="crash-seg" role="group" aria-label="Preview shape">
-                <button type="button" data-cp-shape="horizontal" aria-pressed="true">16:9</button>
-                <button type="button" data-cp-shape="vertical" aria-pressed="false">9:16</button>
-              </span>
+            <span class="crash-seg" role="group" aria-label="Preview shape">
+              <button type="button" data-cp-shape="horizontal" aria-pressed="true">16:9</button>
+              <button type="button" data-cp-shape="vertical" aria-pressed="false">9:16</button>
             </span>
           </div>
           <div class="crash-preview-frame" id="s-cp-preview-frame">
+            <button type="button" class="crash-full" id="s-cp-full" title="View full size" aria-label="View full size">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>
+            </button>
             <video class="crash-preview" id="s-cp-preview-video" muted loop playsinline aria-label="Preview of the reconnect screen"></video>
           </div>
           <span class="crash-note">Drawn by the same code that streams it, and it moves frame for frame as viewers see it. Some Enhanced Broadcasting qualities (AV1 or 10-bit HEVC) show your last frame instead.</span>
@@ -94,35 +94,59 @@
         </div>
       </div>
     </section>
-    <!-- A screen instead of a jump back when a delay turns on or goes up.
-         Off by default; the rest of the card appears once it is turned on.
-         Built like the Crash protection card, whose colours it shares.
+    <!-- A screen for a moment over the jump when the delay changes: one
+         when it goes up (on or raised, viewers jump back), one when it goes
+         down (off or lowered, they jump forward). Each tile turns one on and
+         shows it in the chosen style; the editor appears once either is on.
          Saved with the tab's Save settings button. -->
-    <section class="sys-section" id="s-dt-section" data-screen="transition" data-find="delay transition screen jump back rewind replay delay builds turn on raise style theme">
-      <div class="ic-label">Delay transition</div>
-      <label class="crash-check crash-master">
-        <input type="checkbox" id="s-dt-enabled">
-        <span>
-          <span class="crash-check-title">Show a screen while the delay builds</span>
-          <span class="tab-sub">When a delay turns on or goes up, viewers see a screen instead of the last seconds again, then the stream carries on from where they were. Qualities in AV1 or 10-bit HEVC jump back as before.</span>
-        </span>
-      </label>
+    <section class="sys-section" id="s-dt-section" data-screen="transition" data-find="delay transition screen jump back rewind replay delay goes up down turn on off raise lower style theme catch up going back present">
+      <div class="ic-label">Delay transition<span class="tag">Experimental</span></div>
+      <div class="dt-moments">
+        <label class="dt-moment">
+          <img class="dt-moment-art" id="s-dt-art-into" alt="">
+          <span class="dt-moment-text">
+            <span class="crash-check-title">When the delay goes up</span>
+            <span class="tab-sub">A short screen, then viewers see the last moments again.</span>
+          </span>
+          <input type="checkbox" class="dt-switch" id="s-dt-enabled">
+        </label>
+        <label class="dt-moment">
+          <img class="dt-moment-art" id="s-dt-art-catch-up" alt="">
+          <span class="dt-moment-text">
+            <span class="crash-check-title">When the delay goes down</span>
+            <span class="tab-sub">A short screen, then viewers skip ahead.</span>
+          </span>
+          <input type="checkbox" class="dt-switch" id="s-dt-catch-up">
+        </label>
+      </div>
       <div class="crash-body" id="s-dt-details" hidden>
         <div class="crash-stage">
           <div class="crash-stage-head">
-            <span class="crash-label">What viewers see</span>
-            <span class="crash-stage-tools">
-              <button type="button" class="crash-link" id="s-dt-full">View full size</button>
-              <span class="crash-seg" role="group" aria-label="Preview shape">
-                <button type="button" data-dt-shape="horizontal" aria-pressed="true">16:9</button>
-                <button type="button" data-dt-shape="vertical" aria-pressed="false">9:16</button>
-              </span>
+            <span class="crash-label" id="s-dt-stage-label">What viewers see</span>
+            <span class="crash-seg" id="s-dt-screens" role="group" aria-label="Which screen">
+              <button type="button" data-dt-screen="into" aria-pressed="true">Goes up</button>
+              <button type="button" data-dt-screen="catch-up" aria-pressed="false">Goes down</button>
+            </span>
+            <span class="crash-seg" role="group" aria-label="Preview shape">
+              <button type="button" data-dt-shape="horizontal" aria-pressed="true">16:9</button>
+              <button type="button" data-dt-shape="vertical" aria-pressed="false">9:16</button>
             </span>
           </div>
           <div class="crash-preview-frame" id="s-dt-preview-frame">
+            <button type="button" class="crash-full" id="s-dt-full" title="View full size" aria-label="View full size">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>
+            </button>
             <video class="crash-preview" id="s-dt-preview-video" muted loop playsinline aria-label="Preview of the delay transition screen"></video>
           </div>
-          <span class="crash-note">Drawn by the same code that streams it, and it moves frame for frame as viewers see it.</span>
+          <!-- What viewers see in order: the stream, the screen, the stream
+               where the new delay puts them. -->
+          <ol class="dt-flow" aria-label="What viewers see, in order">
+            <li><span class="dt-flow-bar"></span><span id="s-dt-flow-before">Live</span></li>
+            <li class="dt-flow-screen"><span class="dt-flow-bar"></span><span>Screen</span></li>
+            <li><span class="dt-flow-bar"></span><span id="s-dt-flow-after"></span></li>
+          </ol>
+          <span class="dt-ready" id="s-dt-ready" role="status" hidden></span>
+          <span class="crash-note">AV1 and 10-bit HEVC qualities jump without a screen.</span>
         </div>
         <div class="crash-controls">
           <div class="crash-field">
@@ -130,27 +154,48 @@
             <div class="crash-themes" id="s-dt-themes" role="radiogroup" aria-label="Delay transition style"></div>
           </div>
           <div class="crash-field">
-            <span class="crash-label">Colours</span>
-            <span class="crash-inline">
-              <span class="crash-note">The same as Crash protection, so both screens match.</span>
-              <button type="button" class="crash-link" id="s-dt-colours">Change them</button>
-            </span>
+            <span class="crash-label">Accent</span>
+            <div class="crash-swatches" id="s-dt-swatches" role="group" aria-label="Accent colour">
+              <span class="st-color" title="Custom colour"><input type="color" id="s-dt-accent" aria-label="Custom accent colour"></span>
+            </div>
           </div>
           <div class="crash-field">
+            <span class="crash-label">Background</span>
+            <span class="crash-inline">
+              <span class="st-color"><input type="color" id="s-dt-bg" aria-label="Background colour"></span>
+              <span class="crash-note" id="s-dt-bg-note">Style default</span>
+              <button type="button" class="ic-btn crash-small-btn" id="s-dt-bg-reset">Use style default</button>
+            </span>
+          </div>
+          <div class="crash-field" id="s-dt-text">
             <span class="crash-field-head">
-              <label class="crash-label" for="s-dt-headline">Text</label>
+              <label class="crash-label" for="s-dt-headline">Text when it goes up</label>
               <button type="button" class="crash-link" id="s-dt-text-reset" hidden>Reset text</button>
             </span>
             <span class="crash-text-row">
-              <input id="s-dt-headline" class="ic-input" type="text" maxlength="28" aria-label="Headline">
+              <input id="s-dt-headline" class="ic-input" type="text" maxlength="28" aria-label="Headline when the delay goes up">
               <span class="crash-count mono" id="s-dt-headline-count" aria-hidden="true"></span>
             </span>
             <span class="crash-text-row">
-              <input id="s-dt-subline" class="ic-input" type="text" maxlength="48" aria-label="Subline">
+              <input id="s-dt-subline" class="ic-input" type="text" maxlength="48" aria-label="Small line when the delay goes up">
               <span class="crash-count mono" id="s-dt-subline-count" aria-hidden="true"></span>
             </span>
-            <span class="crash-note">{delay} shows the delay being turned on, like 30 s.</span>
           </div>
+          <div class="crash-field" id="s-dt-cu-text">
+            <span class="crash-field-head">
+              <label class="crash-label" for="s-dt-cu-headline">Text when it goes down</label>
+              <button type="button" class="crash-link" id="s-dt-cu-text-reset" hidden>Reset text</button>
+            </span>
+            <span class="crash-text-row">
+              <input id="s-dt-cu-headline" class="ic-input" type="text" maxlength="28" aria-label="Headline when the delay goes down">
+              <span class="crash-count mono" id="s-dt-cu-headline-count" aria-hidden="true"></span>
+            </span>
+            <span class="crash-text-row">
+              <input id="s-dt-cu-subline" class="ic-input" type="text" maxlength="48" aria-label="Small line when the delay goes down">
+              <span class="crash-count mono" id="s-dt-cu-subline-count" aria-hidden="true"></span>
+            </span>
+          </div>
+          <span class="crash-note">Write {delay} to show the new delay, like 30 s.</span>
         </div>
       </div>
     </section>

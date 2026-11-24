@@ -160,6 +160,8 @@ function applyState(s){
   // not-configured early return below, since Settings is reachable either
   // way and a dead binding is exactly what a first-time user would set.
   if (s.hotkey_conflicts) hkApplyConflicts(s.hotkey_conflicts);
+  // Whether the delay transition's screens are encoded for the stream yet.
+  dtRenderReady(s);
   if ($('hero').hidden) return; // not configured
   // pendingPhase holds a raw phase ('ready', 'idle'), so compare it raw:
   // mapped through PHASE_TO_STATE it never matched after Cut or Disarm and

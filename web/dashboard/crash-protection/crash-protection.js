@@ -1,7 +1,6 @@
 // ── Crash protection card ────────────────────────────────────────────────
 // The reconnect screen's editor. Its pictures come from screen-preview.js;
 // the style list and default text come from GET /config.
-const CP_ACCENTS = [['Cyan','#5ac8fa'],['Violet','#9d7bff'],['Lime','#7ee06b'],['Coral','#ff6b6b'],['Amber','#ffb73a']];
 let cpState = {theme:'whisper', accent:'#5ac8fa', background:'', shape:'horizontal'};
 let cpThemes = [];
 let cpDefaults = {headline:'', subline:''};
@@ -9,21 +8,7 @@ let cpRefreshTimer = null;
 const cpPreview = screenPreview({frame:'s-cp-preview-frame', video:'s-cp-preview-video'});
 
 function cpInit(){
-  const custom = $('s-cp-accent').parentElement;
-  CP_ACCENTS.forEach(([name, hex]) => {
-    const swatch = document.createElement('button');
-    swatch.type = 'button';
-    swatch.className = 'crash-swatch';
-    swatch.style.background = hex;
-    swatch.dataset.hex = hex;
-    swatch.title = name;
-    swatch.setAttribute('aria-label', name);
-    swatch.onclick = () => cpSetAccent(hex);
-    $('s-cp-swatches').insertBefore(swatch, custom);
-  });
-  $('s-cp-accent').oninput = e => cpSetAccent(e.target.value);
-  $('s-cp-bg').oninput = e => { cpState.background = e.target.value.toLowerCase(); cpRender(); };
-  $('s-cp-bg-reset').onclick = () => { cpState.background = ''; cpRender(); };
+  screenBuildColours('s-cp', change => { cpState = {...cpState, ...change}; cpRender(); });
   $('s-cp-text-reset').onclick = () => {
     $('s-cp-headline').value = cpDefaults.headline;
     $('s-cp-subline').value = cpDefaults.subline;
@@ -37,7 +22,6 @@ function cpInit(){
   });
   $('s-cp-full').onclick = () => screenOpenFull(cpLook(), cpState.shape);
 }
-function cpSetAccent(hex){ cpState.accent = hex.toLowerCase(); cpRender(); }
 function cpSyncVisibility(){
   $('s-cp-details').hidden = !$('s-cp-enabled').checked;
   cpScheduleRefresh();
@@ -45,16 +29,10 @@ function cpSyncVisibility(){
 // Reflect cpState in the controls, then refresh the pictures.
 function cpRender(){
   screenMarkTheme($('s-cp-themes'), cpState.theme);
-  document.querySelectorAll('#s-cp-swatches .crash-swatch').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.hex === cpState.accent)));
   document.querySelectorAll('[data-cp-shape]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cpShape === cpState.shape)));
-  $('s-cp-accent').value = cpState.accent;
   const theme = cpThemes.find(t => t.id === cpState.theme);
-  $('s-cp-bg').value = cpState.background || (theme ? theme.background : '#000000');
-  $('s-cp-bg-note').hidden = !!cpState.background;
-  $('s-cp-bg-reset').hidden = !cpState.background;
+  screenRenderColours('s-cp', cpState, theme && theme.background);
   cpScheduleRefresh();
-  // The transition screen shares these colours.
-  dtSchedulePreview();
 }
 function cpRenderText(){
   screenRenderText('s-cp', cpDefaults);
