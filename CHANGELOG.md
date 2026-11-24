@@ -4,16 +4,16 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - No more antivirus false alarms, and screens that move
+## [0.2.1] - Friendlier with antivirus, and screens that move
 
 ### Windows Defender and antivirus
 
-- **Windows Defender no longer flags InstantClone as a trojan.** 0.2.0 was
-  a false positive (`Wacatac.B!ml`), but Defender could quarantine it in
-  the middle of a stream (thanks **@ReddRubinho** on GitHub for the
-  report). Nothing was removed: every feature now does its job the way
-  ordinary apps do, without hidden command windows. A test build went from
-  47 to 9 of 70 engines on VirusTotal, with Microsoft clean.
+- **Friendlier with antivirus.** Windows Defender flagged 0.2.0 as a
+  trojan (`Wacatac.B!ml`, a false positive) and could quarantine it in the
+  middle of a stream (thanks **@ReddRubinho** on GitHub for the report).
+  Every feature now does its job the way ordinary apps do, without hidden
+  command windows, and nothing was removed. Engines decide for themselves,
+  so a brand-new release may still get a false positive from a few.
 - The exe now shows its name, version and icon in Explorer.
 - The download is a little bigger (about 5 MB): the dashboard is stored as
   plain text, which scanners no longer mistake for a packed program.

@@ -72,7 +72,7 @@ Dashboard opens at http://127.0.0.1:7799
 
 That's the whole install. On Windows a tray icon sits in the systray while it runs; right-click for the dashboard, dock, one-click **Cut**, or **Quit**. Closing the tab doesn't kill the proxy, only Quit does. Linux has no tray, so the dashboard is the whole control surface and Quit and Restart live in its System → About tab.
 
-<sub>First launch, Windows SmartScreen may say "unknown publisher" because the build isn't code-signed yet. Click **More info → Run anyway**, or check it against the `SHA256SUMS.txt` on the release.</sub>
+<sub>First launch, Windows SmartScreen may say "unknown publisher" because the build isn't code-signed yet. Click **More info → Run anyway**, or check it against the `SHA256SUMS.txt` on the release. If an antivirus flags it, it's a false positive: [what happened with 0.2.0 and what changed](https://s1moscs.dev/instantclone/blog/windows-defender-false-positive).</sub>
 
 </td>
 <td valign="top" width="50%">
@@ -214,7 +214,15 @@ The dashboard, the OBS dock and the sign-in page speak English and Spanish: pick
 <td valign="top" colspan="2">
 
 **🛡 Crash protection**
-If OBS crashes or freezes, every destination stays live on a reconnect screen (five styles, your colours and text) with silent audio, for up to 5 minutes. OBS coming back resumes on the same connection at its first keyframe, Enhanced Broadcasting included: each track gets its own screen and OBS is handed the same Twitch session. HEVC and AV1 tracks hold their last frame. End it early from the dashboard, the OBS dock, the tray, a hotkey or a MIDI pad.
+If OBS crashes or freezes, every destination stays live on a reconnect screen (eleven styles that move, your colours and text) with silent audio, for up to 5 minutes. OBS coming back resumes on the same connection at its first keyframe, Enhanced Broadcasting included: each track gets its own screen and OBS is handed the same Twitch session. HEVC and AV1 tracks hold their last frame. End it early from the dashboard, the OBS dock, the tray, a hotkey or a MIDI pad.
+
+</td>
+</tr>
+<tr>
+<td valign="top" colspan="2">
+
+**⏪ Delay transition** <sub>experimental</sub>
+Turning a delay on or raising it sends viewers back in time, so they would see the last seconds twice. Turn this on in **System → Extras** and they get a one-second screen instead ("Going back 30 s"), in the same styles as crash protection, with its own colours and words. An optional catch-up screen covers the delay going down or off. H.264 and 8-bit HEVC; AV1 and 10-bit HEVC jump as before.
 
 </td>
 </tr>
@@ -241,7 +249,7 @@ InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. 
 <tr>
 <td valign="top" width="50%">
 
-**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to the keyframe at least N seconds back, so viewers are never closer to live than you set. Those last seconds play once more, which is what going back in time means.
+**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to the keyframe at least N seconds back, so viewers are never closer to live than you set. Those last seconds play once more, which is what going back in time means (the experimental **Delay transition** covers them with a one-second screen).
 
 </td>
 <td valign="top" width="50%">
@@ -343,7 +351,7 @@ Body:   ms=15000
 <br/>
 
 <table>
-<tr><td><b>RAM, idle</b></td><td align="right"><code>~2.3 MB</code></td><td width="24"></td><td><b>RAM, 1080p60 + delay</b></td><td align="right"><code>~3.3 MB</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>960+</code></td></tr>
+<tr><td><b>RAM, idle</b></td><td align="right"><code>~2.5 MB</code></td><td width="24"></td><td><b>RAM, 1080p60 + delay</b></td><td align="right"><code>~3.2 MB</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>960+</code></td></tr>
 </table>
 
 <sub>RAM is Task Manager's memory column for v0.1.18 on Windows 11: the median of 5 runs, a 6 Mbps test stream, a 15 s delay and one local destination, with no dashboard open.</sub>
@@ -434,6 +442,15 @@ No. OBS's video and audio go out as OBS encoded them. Only their containers get 
 In InstantClone's **Destinations** tab, never in OBS. OBS only ever points at InstantClone with one service and a throwaway key; InstantClone holds each platform's real key and fans your feed out to them. So your keys live in one place, and you toggle destinations on and off without touching OBS.
 
 **Your keys never leave your PC.** InstantClone has no servers of its own and no telemetry: keys are stored locally on your machine and only ever sent to the platform ingest servers you choose to stream to. Running the app sends us nothing, we never see your keys, your stream, or anything else. It's open source, so you can verify that yourself.
+
+</details>
+
+<details>
+<summary><b>My antivirus flagged it. Is it safe?</b></summary>
+
+<br/>
+
+Yes. Every release is built by GitHub Actions from this repository's code, with a `SHA256SUMS.txt` to check your download against. Because the exe isn't code-signed, some engines judge it by its looks: 0.2.0 was flagged that way, and 0.2.1 stopped doing the things that looked suspicious (hidden command windows, a "packed" exe) without removing a feature. If yours still flags a release, [open an issue](https://github.com/Soulhackzlol/InstantClone/issues/new/choose) and I'll report it as a false positive. The whole story is [on the blog](https://s1moscs.dev/instantclone/blog/windows-defender-false-positive).
 
 </details>
 
