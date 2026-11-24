@@ -62,6 +62,9 @@ fn lan_agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .max_redirects(0)
+        // Never used for plain HTTP, but an agent left on ureq's default
+        // TLS roots would abort the app if a call ever reached HTTPS.
+        .tls_config(crate::https::tls_config())
         .http_status_as_error(false)
         .build()
         .into()

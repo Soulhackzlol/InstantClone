@@ -534,7 +534,14 @@ pub async fn run(ctrl: Arc<Controller>, mut settings: watch::Receiver<Settings>)
         };
         let our_ports: Vec<u16> = std::iter::once(web_port).chain(earlier_port).collect();
         if !wanted {
-            restore_services(&our_ports);
+            // Only put Streamlabs back if this run pointed it at us. With the
+            // feature off from launch, its files are never opened: reading
+            // another app's AppData at startup is a stealer trait antivirus
+            // scores (issue #101). The dashboard's Disconnect restores on
+            // its own, so a switch-off is covered either way.
+            if earlier_port.is_some() {
+                restore_services(&our_ports);
+            }
             earlier_port = None;
             set_status(Status {
                 state: "off",

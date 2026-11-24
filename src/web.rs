@@ -148,7 +148,6 @@ async fn serve(
         return Ok(());
     };
     let (origin, host) = parse_origin_host(head_str);
-    let accept_gzip = accepts_gzip(head_str);
 
     // CSRF guard - block cross-origin browser POSTs. See `allow_csrf`
     // for the policy. Pre-flight OPTIONS gets a generic 204 so browsers
@@ -248,32 +247,19 @@ async fn serve(
         AuthDecision::Allow { cookie, is_admin } => (cookie, is_admin),
     };
 
-    // Fast-path: static, pre-gzipped dashboard + dock. These two pages
-    // dominate the binary (~125 KB raw); shipping only the gz blob saves
-    // ~100 KB. Every real browser sends `Accept-Encoding: gzip`; for the
-    // rare client that doesn't we return 406 with a friendly hint rather
-    // than ship a runtime inflater that would erase the savings.
+    // Fast-path: the static dashboard + dock, embedded at build time and
+    // written straight from the binary. Embedded as plain text, not gzip:
+    // compressed blobs made the exe look packed to antivirus scanners
+    // (issue #101), and every request is local, so compression saved
+    // nothing on the wire.
     if method == "GET" && (bare_path == "/" || bare_path == "/dock") {
-        if !accept_gzip {
-            let body = b"this build serves gzip-encoded HTML; \
-                         retry with Accept-Encoding: gzip" as &[u8];
-            let r = format!(
-                "HTTP/1.1 406 Not Acceptable\r\nContent-Type: text/plain; charset=utf-8\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            sock.write_all(r.as_bytes()).await?;
-            sock.write_all(body).await?;
-            return Ok(());
-        }
         let blob: &'static [u8] = if bare_path == "/" {
-            INDEX_HTML_GZ
+            INDEX_HTML
         } else {
-            DOCK_HTML_GZ
+            DOCK_HTML
         };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
-             Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n\
              Content-Length: {}\r\n\
              Access-Control-Allow-Origin: *\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
             blob.len(),
@@ -284,36 +270,23 @@ async fn serve(
         return Ok(());
     }
 
-    // Overlay Studio runtime - static pre-gzipped JS, same fast-path as
-    // the dashboard. Served to the dashboard tab only; baked overlays
-    // inline what they need and never request this.
+    // The pages' static scripts, the same fast-path as the dashboard. The
+    // Overlay Studio runtime goes to the dashboard tab only; baked overlays
+    // inline what they need and never request it.
     if method == "GET"
         && (bare_path == "/overlay-runtime.js"
             || bare_path == "/dock.js"
             || bare_path == "/integrations.js"
             || bare_path == "/studio.js")
     {
-        if !accept_gzip {
-            let body = b"this build serves gzip-encoded JS; \
-                         retry with Accept-Encoding: gzip" as &[u8];
-            let r = format!(
-                "HTTP/1.1 406 Not Acceptable\r\nContent-Type: text/plain; charset=utf-8\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            sock.write_all(r.as_bytes()).await?;
-            sock.write_all(body).await?;
-            return Ok(());
-        }
         let blob: &'static [u8] = match bare_path {
-            "/dock.js" => DOCK_JS_GZ,
-            "/integrations.js" => INTEGRATIONS_JS_GZ,
-            "/studio.js" => STUDIO_JS_GZ,
-            _ => OVERLAY_RUNTIME_JS_GZ,
+            "/dock.js" => DOCK_JS,
+            "/integrations.js" => INTEGRATIONS_JS,
+            "/studio.js" => STUDIO_JS,
+            _ => OVERLAY_RUNTIME_JS,
         };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
-             Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n\
              Content-Length: {}\r\n\
              Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
             blob.len()
@@ -327,12 +300,12 @@ async fn serve(
     // translator; any other language's file carries its strings too.
     if method == "GET" && bare_path == "/i18n.js" {
         let blob = match page_language(&settings.borrow().ui_language, head_str) {
-            "es" => I18N_ES_JS_GZ,
-            _ => I18N_EN_JS_GZ,
+            "es" => I18N_ES_JS,
+            _ => I18N_EN_JS,
         };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
-             Content-Encoding: gzip\r\nContent-Length: {}\r\n\
+             Content-Length: {}\r\n\
              Cache-Control: no-store\r\nConnection: close\r\n\r\n",
             blob.len()
         );
@@ -987,7 +960,7 @@ async fn route(
 
     match (method, bare_path) {
         // GET / and GET /dock are handled in serve() as a fast-path
-        // (static gz blob, no allocation, no String round-trip).
+        // (static embedded page, no allocation, no String round-trip).
         ("GET", "/overlay") => ("200 OK", "text/html; charset=utf-8", overlay_html(query)),
         ("GET", "/alerts") => (
             "200 OK",
@@ -5611,41 +5584,6 @@ fn parse_origin_host(head: &str) -> (String, String) {
     (origin, host)
 }
 
-/// True iff the client's `Accept-Encoding` header advertises `gzip` (with
-/// a non-zero q value if specified). Used by the static-page fast-path
-/// to decide whether to ship the pre-gzipped HTML blob directly.
-fn accepts_gzip(head: &str) -> bool {
-    for line in head.split("\r\n") {
-        if let Some(v) = strip_prefix_icase(line, "accept-encoding:") {
-            for part in v.split(',') {
-                let p = part.trim();
-                // Each entry is `token` or `token;q=N`. We only need to
-                // confirm gzip appears with q != 0.
-                let (token, q) = match p.split_once(';') {
-                    Some((t, params)) => {
-                        let qv = params
-                            .split(';')
-                            .find_map(|kv| {
-                                let kv = kv.trim();
-                                kv.strip_prefix("q=").or_else(|| kv.strip_prefix("Q="))
-                            })
-                            .and_then(|s| s.parse::<f32>().ok())
-                            .unwrap_or(1.0);
-                        (t.trim(), qv)
-                    }
-                    None => (p, 1.0),
-                };
-                if q > 0.0
-                    && (token.eq_ignore_ascii_case("gzip") || token.eq_ignore_ascii_case("*"))
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
 /// CSRF guard for POST endpoints. Returns true if the request should be
 /// allowed.
 ///
@@ -6100,35 +6038,34 @@ fn json_escape(s: &str) -> String {
 /// Compact view for OBS browser-dock embedding. ~280x340 looks decent.
 /// Reuses the same `/state` + `/arm` + `/activate` + `/stop` endpoints
 /// as the main dashboard so behavior stays identical. Source lives in
-/// `web/dock.html` - built-time minified + gzipped (see `build.rs`).
-static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html.gz"));
+/// `web/dock.html` - minified at build time (see `build.rs`).
+static DOCK_HTML: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html"));
 
 /// Dock logic (widget rendering, gear editor, state polling). Split out of
 /// `dock.html` so the page stays markup+CSS; source in `web/dock.js`,
-/// build-time gzipped (see `build.rs`).
-static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"));
+/// embedded at build time (see `build.rs`).
+static DOCK_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js"));
 
 /// Main dashboard / first-run wizard. Source lives in `web/dashboard/`
-/// (its skeleton `index.html` includes the pieces); build-time joined,
-/// minified + gzipped (see `build.rs`).
-static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
+/// (its skeleton `index.html` includes the pieces); joined and
+/// minified at build time (see `build.rs`).
+static INDEX_HTML: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html"));
 /// The dashboard's Integrations tab; source in `web/integrations/`
-/// (its skeleton `integrations.js` includes the pieces), build-time
-/// gzipped like the dock script.
-static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
-/// The Overlay Studio editor; source in `web/studio.js`, gzipped the same way.
-static STUDIO_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js.gz"));
+/// (its skeleton `integrations.js` includes the pieces), joined at build
+/// time like the dashboard.
+static INTEGRATIONS_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js"));
+/// The Overlay Studio editor; source in `web/studio.js`, embedded the same way.
+static STUDIO_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js"));
 
 /// Overlay Studio author-time runtime + baker. Loaded only by the
 /// dashboard (never by a live overlay in OBS). Source lives in
-/// `web/overlay-runtime.js`; build-time gzipped (see `build.rs`).
-static OVERLAY_RUNTIME_JS_GZ: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/overlay-runtime.js.gz"));
+/// `web/overlay-runtime.js`; embedded at build time (see `build.rs`).
+static OVERLAY_RUNTIME_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/overlay-runtime.js"));
 
 /// `web/i18n.js` alone (English), and with the Spanish strings ahead of it.
 /// Built from `web/i18n/` (see `build.rs`).
-static I18N_EN_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-en.js.gz"));
-static I18N_ES_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-es.js.gz"));
+static I18N_EN_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-en.js"));
+static I18N_ES_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-es.js"));
 
 /// The language the pages show: the one picked in System, or for "auto" the
 /// first one in the browser's `Accept-Language` list that has strings.
@@ -6161,7 +6098,7 @@ fn page_language(setting: &str, head: &str) -> &'static str {
 /// Optional VOD-unlocker OBS Lua script, embedded from `obs/`. Served by
 /// `GET /obs/vod-script/download` as a Save-As attachment. Embedding keeps it
 /// in lockstep with the running binary (no release-asset version skew) and
-/// needs no network. ~8 KB of text; not worth gzipping for a one-off download.
+/// needs no network.
 static VOD_UNLOCKER_LUA: &str = include_str!("../obs/instantclone-vod-track.lua");
 /// Render the OBS browser-source overlay. Supports two query knobs:
 ///   ?lang=en|es|pt|fr|de                         - label localization
@@ -7555,31 +7492,6 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         ));
     }
 
-    /// The compressed page goes only to a browser that asked for gzip.
-    #[test]
-    fn gzip_is_sent_only_to_a_client_that_accepts_it() {
-        for (header, accepted, why) in [
-            ("Accept-Encoding: gzip, deflate, br", true, "listed"),
-            ("Accept-Encoding: gzip", true, "alone"),
-            ("accept-encoding: GZIP", true, "any letter case"),
-            ("Accept-Encoding: *", true, "the wildcard"),
-            (
-                "Accept-Encoding: gzip;q=0.5, deflate",
-                true,
-                "a quality above zero",
-            ),
-            ("Host: x", false, "no header"),
-            ("Accept-Encoding: identity", false, "identity only"),
-            ("Accept-Encoding: deflate, br", false, "other codings only"),
-            // RFC 7231: `q=0` explicitly forbids that coding.
-            ("Accept-Encoding: gzip;q=0", false, "gzip forbidden"),
-            ("Accept-Encoding: *;q=0", false, "everything forbidden"),
-        ] {
-            let head = format!("GET / HTTP/1.1\r\n{header}\r\n");
-            assert_eq!(accepts_gzip(&head), accepted, "{why}: {header}");
-        }
-    }
-
     /// `/overlay` needs no auth, and its `lang` is written into the page's
     /// own `<html lang="...">`. An unvalidated value there is reflected XSS
     /// on our own origin: script that runs there passes the same-origin CSRF
@@ -8544,8 +8456,8 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
             Response::parse(&self.send_raw_from(peer_ip, raw).await)
         }
 
-        /// The response bytes as they came, for a body that isn't text (the
-        /// gzipped dashboard and dock pages).
+        /// The response bytes as they came, for a test that reads only the head
+        /// (the dashboard and dock pages are large).
         async fn send_raw_from(&self, peer_ip: &str, raw: &[u8]) -> Vec<u8> {
             let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
             let addr = listener.local_addr().expect("addr");
@@ -9374,12 +9286,9 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         let live = locked_live();
         let path = format!("/dock?token={TEST_DOCK_TOKEN}");
         let raw = live
-            .send_raw_from(
-                "127.0.0.1",
-                &request("GET", &path, "Accept-Encoding: gzip\r\n", b""),
-            )
+            .send_raw_from("127.0.0.1", &request("GET", &path, "", b""))
             .await;
-        // The page itself is gzip, so only the head is read as text.
+        // Only the head matters here; the page itself is large.
         let head_end = find_subslice(&raw, b"\r\n\r\n").expect("a response head");
         let head = std::str::from_utf8(&raw[..head_end]).expect("a text head");
         assert!(head.starts_with("HTTP/1.1 200 "), "{head}");

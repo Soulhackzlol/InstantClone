@@ -4243,7 +4243,7 @@
 "services.json is missing the `services` array - file looks unfamiliar, restore from services.json.instantclone.bak or let OBS regenerate it.": "a services.json le falta la lista `services`: el archivo no es el esperado. Restáuralo desde services.json.instantclone.bak o deja que OBS lo regenere.",
 "couldn't unambiguously remove the InstantClone entry - restore from services.json.instantclone.bak manually": "no se pudo quitar con seguridad la entrada de InstantClone: restáurala a mano desde services.json.instantclone.bak",
 "launching OBS is not supported on this platform": "abrir OBS no está disponible en esta plataforma",
-"PowerShell did not create the shortcut": "PowerShell no creó el acceso directo",
+"the shell did not write the shortcut": "Windows no guardó el acceso directo",
 "could not locate your Desktop folder": "no se encontró tu carpeta Escritorio",
 "Desktop folder not found at {}": "no se encontró la carpeta Escritorio en {}",
 "desktop shortcut creation is not supported on this platform": "crear accesos directos no está disponible en esta plataforma",

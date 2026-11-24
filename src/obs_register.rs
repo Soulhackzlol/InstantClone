@@ -2226,35 +2226,16 @@ fn desktop_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join("Desktop"))
 }
 
-/// PowerShell single-quoted-string escaping: a literal `'` becomes `''`.
-#[cfg(windows)]
-fn ps_single_quote(s: &str) -> String {
-    s.replace('\'', "''")
-}
-
-/// Try to create a real Windows `.lnk` shortcut via PowerShell COM.
-/// Returns Ok only when PowerShell reports success AND the file exists.
+/// Try to create a real Windows `.lnk` shortcut that starts VOD + EB mode.
+/// Returns Ok only when the shell reports success AND the file exists.
 #[cfg(windows)]
 fn try_create_lnk(lnk: &Path, exe: &Path) -> io::Result<()> {
     let workdir = exe.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-    let script = format!(
-        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');\
-         $s.TargetPath='{exe}';$s.Arguments='--launch-eb';\
-         $s.IconLocation='{exe}';$s.WorkingDirectory='{wd}';$s.Save()",
-        lnk = ps_single_quote(&lnk.display().to_string()),
-        exe = ps_single_quote(&exe.display().to_string()),
-        wd = ps_single_quote(&workdir.display().to_string()),
-    );
-    use std::os::windows::process::CommandExt as _;
-    let status = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        // A release build has no console, so PowerShell would flash one open.
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-        .status()?;
-    if status.success() && lnk.exists() {
+    crate::shell_link::create(lnk, exe, "--launch-eb", &workdir)?;
+    if lnk.exists() {
         Ok(())
     } else {
-        Err(io::Error::other("PowerShell did not create the shortcut"))
+        Err(io::Error::other("the shell did not write the shortcut"))
     }
 }
 

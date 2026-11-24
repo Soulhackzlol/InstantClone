@@ -359,7 +359,7 @@ cargo build --release
 .\target\release\instantclone.exe
 ```
 
-The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, build-only) and embedded into the binary; at runtime it's served with `Content-Encoding: gzip`. The optional VOD-unlocker OBS script is embedded too and handed to the browser as a Save-As download, so it always matches the running binary and needs no network.
+The dashboard HTML is minified at build time by `build.rs` and embedded into the binary as plain text (no gzip: compressed blobs make antivirus scanners read the exe as packed). The optional VOD-unlocker OBS script is embedded too and handed to the browser as a Save-As download, so it always matches the running binary and needs no network.
 
 **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already the async buffer; the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet.
 
