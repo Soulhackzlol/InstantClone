@@ -72,6 +72,8 @@ mod revisions;
 mod rtmp;
 mod self_update;
 mod sha256;
+#[cfg(windows)]
+mod shell_link;
 mod sink;
 mod slate;
 mod streamlabs;
@@ -90,7 +92,6 @@ mod winget_record;
 
 use crate::config::Settings;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -1944,20 +1945,58 @@ async fn stop_signal() -> &'static str {
     "ctrl-c"
 }
 
+/// Open `url` in the default browser.
+///
+/// Windows asks the shell directly rather than going through a hidden
+/// `cmd /c start`: antivirus engines score an unsigned app that spawns
+/// hidden shells as malware (issue #101). Runs on its own thread because
+/// the shell call can take a moment and needs COM set up on its thread.
+#[cfg(windows)]
 fn open_browser(url: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt as _;
-        // A release build has no console, so `cmd` would flash one open.
-        let _ = Command::new("cmd")
-            .args(["/c", "start", "", url])
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-            .spawn();
-    }
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        let verb: Vec<u16> = "open\0".encode_utf16().collect();
+        let target: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        // ShellExecute returns a value above 32 on success (its documented
+        // contract, kept from 16-bit Windows).
+        let result = unsafe {
+            CoInitializeEx(
+                std::ptr::null(),
+                (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+            );
+            let result = ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            ) as isize;
+            CoUninitialize();
+            result
+        };
+        if result <= 32 {
+            log_line!("[browser] could not open {url} (ShellExecute code {result})");
+        }
+    });
+}
+
+/// Open `url` in the default browser.
+#[cfg(unix)]
+fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(url).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(url).spawn();
+    let opener = "open";
+    #[cfg(not(target_os = "macos"))]
+    let opener = "xdg-open";
+    if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
+        log_line!("[browser] could not open {url} ({opener}: {e})");
+    }
 }
 
 /// Create the overlays directory (if missing) and drop the folder README

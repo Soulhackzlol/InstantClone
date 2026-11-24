@@ -1,21 +1,17 @@
-//! Build-time HTML pipeline: minify + gzip web/*.html, emit gz blobs to
-//! OUT_DIR so the binary embeds only the compressed bytes. Skips the
-//! minifier on anything that looks risky (template literals, <pre>).
-//! The dashboard page and the Integrations script are first built from
-//! their skeletons, web/dashboard/index.html and
-//! web/integrations/integrations.js (see `read_pieced`).
+//! Build-time page pipeline: minify web/*.html and write the served files
+//! to OUT_DIR, where the binary embeds them. Skips the minifier on anything
+//! that looks risky (template literals, <pre>). The dashboard page and the
+//! Integrations script are first built from their skeletons,
+//! web/dashboard/index.html and web/integrations/integrations.js (see
+//! `read_pieced`).
 //!
-//! Net effect: the dashboard's ~870 KB of HTML/CSS/JS in source goes out
-//! as ~165 KB gzipped. The release binary serves the gz blob directly with
-//! `Content-Encoding: gzip` - every real browser supports it.
+//! The files are embedded as plain text, not gzip. Compressed blobs made
+//! the exe look packed to antivirus scanners (issue #101), and every
+//! request comes from this PC, so compression saved nothing on the wire.
 
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
-
-use flate2::write::GzEncoder;
-use flate2::Compression;
 
 // The skeleton rules, shared with the app's tests (see the module's header).
 #[path = "src/pieced.rs"]
@@ -23,20 +19,24 @@ mod pieced;
 // The page minifier, shared with the app's tests the same way.
 #[path = "src/minify.rs"]
 mod minify;
+// The exe's version info, icon and manifest.
+#[cfg(windows)]
+#[path = "build/win_resource.rs"]
+mod win_resource;
 
 fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let web_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("web");
 
-    // (file, run_minifier). The overlay runtime is gzip-only: it is
+    // (file, run_minifier). The overlay runtime is not minified: it is
     // regex- and template-literal-heavy (the live overlay JS lives in
     // String.raw templates), which is exactly where the conservative
-    // line minifier has edge cases - gzip alone compresses it fine.
+    // line minifier has edge cases.
     for (name, do_min) in &[
         ("index.html", true),
         ("dock.html", true),
         // Dock logic is template-literal / regex heavy (same reasons as the
-        // overlay runtime), so skip the line minifier and let gzip do it.
+        // overlay runtime), so skip the line minifier.
         ("dock.js", false),
         ("overlay-runtime.js", false),
         // Integrations UI: template-literal heavy like the dock.
@@ -48,19 +48,19 @@ fn main() {
             Some((_, skeleton)) => read_pieced(&web_dir, skeleton),
             None => read_web(&web_dir.join(name)),
         };
+        let raw_len = raw.len();
         let processed: Vec<u8> = if *do_min {
             minify::minify(&raw)
         } else {
-            raw.clone().into_bytes()
+            raw.into_bytes()
         };
 
-        let gz_size = write_gz(&out_dir.join(format!("{name}.gz")), &processed);
+        write_out(&out_dir.join(name), &processed);
         println!(
-            "cargo:warning={}: {} B raw -> {} B out -> {} B gz",
+            "cargo:warning={}: {} B raw -> {} B out",
             name,
-            raw.len(),
-            processed.len(),
-            gz_size
+            raw_len,
+            processed.len()
         );
     }
 
@@ -68,19 +68,12 @@ fn main() {
     // language's strings (web/i18n/<lang>.json, a JSON object, so it drops
     // into the script as it is).
     let translator = read_web(&web_dir.join("i18n.js"));
-    write_gz(&out_dir.join("i18n-en.js.gz"), translator.as_bytes());
+    write_out(&out_dir.join("i18n-en.js"), translator.as_bytes());
     for lang in TRANSLATED {
         let strings = read_web(&web_dir.join("i18n").join(format!("{lang}.json")));
         let script = format!("window.IC_I18N={{lang:\"{lang}\",strings:{strings}}};\n{translator}");
-        let gz_size = write_gz(
-            &out_dir.join(format!("i18n-{lang}.js.gz")),
-            script.as_bytes(),
-        );
-        println!(
-            "cargo:warning=i18n {lang}: {} B raw -> {} B gz",
-            script.len(),
-            gz_size
-        );
+        write_out(&out_dir.join(format!("i18n-{lang}.js")), script.as_bytes());
+        println!("cargo:warning=i18n {lang}: {} B", script.len());
     }
 
     // Tray icon (Windows only). We hand-build a multi-resolution ICO so
@@ -89,17 +82,23 @@ fn main() {
     // cyan rounded square with two white pause bars (pause = "delay").
     #[cfg(windows)]
     {
+        let icons: Vec<(u32, Vec<u8>)> = [16, 32, 48]
+            .into_iter()
+            .map(|size| (size, make_image(size)))
+            .collect();
         let ico_path = out_dir.join("icon.ico");
-        let bytes = make_ico(&[16, 32, 48]);
+        let bytes = make_ico(&icons);
         fs::write(&ico_path, &bytes).unwrap();
         println!(
             "cargo:warning=icon.ico: {} bytes ({} sizes)",
             bytes.len(),
-            3
+            icons.len()
         );
+        link_windows_resources(&out_dir, &icons);
     }
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build/win_resource.rs");
 }
 
 /// The languages with strings in web/i18n/, besides English (the code's
@@ -138,13 +137,9 @@ fn read_pieced(web_dir: &std::path::Path, skeleton: &str) -> String {
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// Gzip `bytes` into `path`; returns the compressed size.
-fn write_gz(path: &std::path::Path, bytes: &[u8]) -> u64 {
-    let f = fs::File::create(path).unwrap();
-    let mut enc = GzEncoder::new(f, Compression::best());
-    enc.write_all(bytes).unwrap();
-    enc.finish().unwrap();
-    fs::metadata(path).unwrap().len()
+/// Write one served file into OUT_DIR for the binary to embed.
+fn write_out(path: &std::path::Path, bytes: &[u8]) {
+    fs::write(path, bytes).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
 }
 
 // ---------- ICO generation ----------
@@ -157,20 +152,43 @@ fn write_gz(path: &std::path::Path, bytes: &[u8]) -> u64 {
 // keys off the alpha channel of 32bpp images, but we still ship a
 // correct (all-zero) AND mask for safety.
 
+/// Give the exe its version info, icon and manifest (see
+/// build/win_resource.rs for why). The MSVC linker takes a `.res` file as a
+/// plain input, so no resource compiler is needed. Other toolchains skip it.
 #[cfg(windows)]
-fn make_ico(sizes: &[u32]) -> Vec<u8> {
-    let images: Vec<Vec<u8>> = sizes.iter().map(|&s| make_image(s)).collect();
-    let header_size = 6 + 16 * sizes.len();
-    let mut buf = Vec::with_capacity(header_size + images.iter().map(|i| i.len()).sum::<usize>());
+fn link_windows_resources(out_dir: &std::path::Path, icons: &[(u32, Vec<u8>)]) {
+    let is_msvc_windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if !is_msvc_windows {
+        return;
+    }
+    let res_path = out_dir.join("instantclone.res");
+    let version = env::var("CARGO_PKG_VERSION").unwrap();
+    let info = win_resource::ProductInfo {
+        version: &version,
+        company: "s1moscs",
+        product: "InstantClone",
+    };
+    win_resource::write_res(&res_path, &info, icons);
+    println!("cargo:rustc-link-arg-bins={}", res_path.display());
+}
+
+/// (size, image) pairs into one ICO file.
+#[cfg(windows)]
+fn make_ico(icons: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    let header_size = 6 + 16 * icons.len();
+    let mut buf =
+        Vec::with_capacity(header_size + icons.iter().map(|(_, i)| i.len()).sum::<usize>());
 
     // ICONDIR
     buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
     buf.extend_from_slice(&1u16.to_le_bytes()); // type = icon
-    buf.extend_from_slice(&(sizes.len() as u16).to_le_bytes());
+    buf.extend_from_slice(&(icons.len() as u16).to_le_bytes());
 
     let mut offset = header_size as u32;
-    for (i, &size) in sizes.iter().enumerate() {
-        let img_size = images[i].len() as u32;
+    for (size, image) in icons {
+        let size = *size;
+        let img_size = image.len() as u32;
         // 0 means 256 in ICONDIRENTRY; otherwise the actual dimension.
         let dim = if size >= 256 { 0u8 } else { size as u8 };
         buf.push(dim); // width
@@ -183,8 +201,8 @@ fn make_ico(sizes: &[u32]) -> Vec<u8> {
         buf.extend_from_slice(&offset.to_le_bytes()); // image_offset
         offset += img_size;
     }
-    for img in images {
-        buf.extend_from_slice(&img);
+    for (_, image) in icons {
+        buf.extend_from_slice(image);
     }
     buf
 }

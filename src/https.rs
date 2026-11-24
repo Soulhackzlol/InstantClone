@@ -45,24 +45,30 @@ pub fn https_agent_with_timeout(timeout: Duration) -> Agent {
 fn agent(timeout: Option<Duration>) -> Agent {
     Agent::config_builder()
         .timeout_global(timeout)
-        .tls_config(
-            TlsConfig::builder()
-                .provider(TlsProvider::NativeTls)
-                // The OS certificate store (schannel on Windows). ureq's
-                // default hands native-tls a bundled root list instead, and
-                // schannel then refuses any server whose chain it builds to
-                // a root outside that list: Discord's does, so every
-                // webhook failed with "unable to find any user-specified
-                // roots in the final cert chain".
-                .root_certs(RootCerts::PlatformVerifier)
-                .build(),
-        )
+        .tls_config(tls_config())
         // Non-2xx as Ok(resp): the Twitch proxy needs the 4xx body to
         // surface why allocation failed; webhooks check
         // `resp.status()` directly. Either way, one code path.
         .http_status_as_error(false)
         .build()
         .into()
+}
+
+/// The TLS setup every agent must use, plain-HTTP ones included.
+///
+/// Roots come from the OS certificate store (schannel on Windows). ureq's
+/// default hands native-tls a bundled root list instead, and schannel then
+/// refuses any server whose chain it builds to a root outside that list:
+/// Discord's does, so every webhook failed with "unable to find any
+/// user-specified roots in the final cert chain". The bundle is also not
+/// compiled in (see Cargo.toml), and ureq panics on an agent left on its
+/// default, so an agent without this config would abort the app on its
+/// first HTTPS call.
+pub fn tls_config() -> TlsConfig {
+    TlsConfig::builder()
+        .provider(TlsProvider::NativeTls)
+        .root_certs(RootCerts::PlatformVerifier)
+        .build()
 }
 
 #[cfg(test)]

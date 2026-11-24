@@ -1,7 +1,7 @@
 # The web pages
 
 Everything the app shows in a browser lives here. The Rust app embeds these
-files at build time (gzipped, see [build.rs](../build.rs)) and serves them from
+files at build time (see [build.rs](../build.rs)) and serves them from
 memory, so a change here needs a `cargo build` before you see it.
 
 There is no framework, bundler or npm install: plain HTML, CSS and JavaScript,
